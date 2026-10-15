@@ -254,9 +254,78 @@ class Repository(private val context: Context) {
                 store.put(Meta("seed-v2", "1"))
             }
         }
+        if (store.meta("seed-v3") == null) {
+            seedV3()
+            store.put(Meta("seed-v3", "1"))
+        }
         ensureDayLocked(Clock.today())
         replanLocked()
     }
+
+    /** Version 0.3 additions: arm-wrestling forearms, boxing, reading, Quran plans. */
+    private suspend fun seedV3() {
+        val today = Clock.today().toString()
+        val extra = listOf(
+            Rule(id = "arm-forearms", title = "تمارين سواعد (مصارعة الذراعين)", minutes = Scheduler.sessionMinutes(4, 45, 120),
+                everyHours = 72, kind = "training", sets = 4, workSec = 45, restSec = 120, anchorDay = today,
+                source = "قيمة مقترحة: أوتار الساعد والقبضة تحتاج تعافياً أطول، 48–72 ساعة بين الجلسات"),
+            Rule(id = "boxing", title = "بوكسنق", minutes = 60, everyHours = 168, anchorDay = today),
+            Rule(id = "reading-books", title = "قراءة كتاب", minutes = 30, everyHours = 24, anchorDay = today),
+        )
+        extra.forEach { if (store.rule(it.id) == null) store.put(it) }
+        if (plansLocked().isEmpty()) savePlansLocked(
+            listOf(
+                Plan(id = "quran-memorize", title = "حفظ القرآن", kind = "memorize", minutesPerUnit = 20),
+                Plan(id = "quran-read", title = "ورد قراءة القرآن", kind = "read", minutesPerUnit = 2, perDay = 10),
+                Plan(id = "quran-review", title = "مراجعة الحفظ سماعاً", kind = "review", minutesPerUnit = 1),
+            )
+        )
+    }
+
+    // ---------- plans (stored as JSON in meta) ----------
+
+    suspend fun plans(): List<Plan> = lock.withLock { plansLocked() }
+
+    private suspend fun plansLocked(): List<Plan> = Plans.parse(store.meta("plans"))
+
+    private suspend fun savePlansLocked(list: List<Plan>) = store.put(Meta("plans", Plans.encode(list)))
+
+    /** Saves a plan; an accepted, configured plan gets a daily rule that feeds the schedule. */
+    suspend fun savePlan(plan: Plan) = lock.withLock {
+        val list = plansLocked().filter { it.id != plan.id } + plan
+        savePlansLocked(list)
+        val ruleId = "plan-${plan.id}"
+        val existing = store.rule(ruleId)
+        val active = plan.accepted && plan.configured
+        val rule = (existing ?: Rule(id = ruleId, title = plan.title, minutes = 15, anchorDay = Clock.today().toString()))
+            .copy(active = active, title = plan.title)
+        store.put(rule)
+        // Rebuild today's open instance so it reflects the new numbers.
+        store.tasksOn(Clock.today().toString()).filter { it.ruleId == ruleId && it.open && !it.running && it.spent == 0L }
+            .forEach { store.delete(it.id) }
+        ensureDayLocked(Clock.today())
+        replanLocked()
+    }
+
+    suspend fun deletePlan(id: String) = lock.withLock {
+        savePlansLocked(plansLocked().filter { it.id != id })
+        store.deleteRule("plan-$id")
+        store.tasksOn(Clock.today().toString()).filter { it.ruleId == "plan-$id" && it.open && it.spent == 0L && !it.running }
+            .forEach { store.delete(it.id) }
+        replanLocked()
+    }
+
+    /** Accepts the yearly plan of sports goals: their main training sessions enter the schedule. */
+    suspend fun acceptGoals(ids: List<String>) = lock.withLock {
+        val today = Clock.today().toString()
+        store.allRules().filter { it.goalId in ids && it.role == "main" && !it.active }
+            .forEach { store.put(it.copy(active = true, anchorDay = today)) }
+        ensureDayLocked(Clock.today())
+        replanLocked()
+    }
+
+    private suspend fun memorizedLast(plans: List<Plan>): Int =
+        plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0
 
     private suspend fun seedTraining() {
         val root = JSONObject(asset("training-seed.json"))
@@ -305,9 +374,17 @@ class Repository(private val context: Context) {
             val last = r.lastDoneDay?.let(LocalDate::parse)
             if (!Scheduler.isDue(r.everyHours, r.weekdays, LocalDate.parse(r.anchorDay), last, day)) continue
             if (existing.any { it.ruleId == r.id && it.day == dayStr }) continue
+            var instance = instanceOf(r, day)
+            if (r.id.startsWith("plan-")) {
+                val plans = plansLocked()
+                val plan = plans.firstOrNull { "plan-${it.id}" == r.id } ?: continue
+                val range = PlanMath.today(plan, day, memorizedLast(plans)) ?: continue
+                instance = instance.copy(title = PlanMath.title(plan, range), minutes = PlanMath.minutes(plan, range),
+                    interruptible = plan.kind == "review")
+            }
             existing.filter { it.ruleId == r.id && it.open && it.day < dayStr && !it.running }
                 .forEach { store.put(it.copy(state = "skipped")) }
-            store.put(instanceOf(r, day))
+            store.put(instance)
         }
     }
 
@@ -426,7 +503,22 @@ class Repository(private val context: Context) {
         val t = store.task(id) ?: return@withLock
         store.put(t.copy(state = "done", spent = Maths.spent(t, now), started = 0, finishedAt = now))
         t.ruleId?.let { rid -> store.rule(rid)?.let { store.put(it.copy(lastDoneDay = t.day.coerceAtLeast(it.lastDoneDay ?: ""))) } }
+        if (t.ruleId?.startsWith("plan-") == true) {
+            val plans = plansLocked()
+            val plan = plans.firstOrNull { "plan-${it.id}" == t.ruleId }
+            val last = memorizedLast(plans)
+            val range = plan?.let { PlanMath.today(it, LocalDate.parse(t.day), last) }
+            if (plan != null && range != null) savePlansLocked(plans.map { if (it.id == plan.id) PlanMath.advance(plan, range, last) else it })
+        }
         replanLocked()
+    }
+
+    /** Pages of today's open review task (for the player). */
+    suspend fun reviewPages(): List<Int> = lock.withLock {
+        val plans = plansLocked()
+        val p = plans.firstOrNull { it.kind == "review" } ?: return@withLock emptyList()
+        val r = PlanMath.today(p, Clock.today(), memorizedLast(plans)) ?: return@withLock emptyList()
+        (r.from..r.to).toList()
     }
 
     suspend fun reopen(id: String) = lock.withLock {
@@ -535,7 +627,7 @@ class Repository(private val context: Context) {
         val logs = JSONArray()
         store.allLogs().forEach { l -> logs.put(JSONObject().put("id", l.id).put("goalId", l.goalId).put("day", l.day).put("value", l.value)) }
         val meta = JSONObject()
-        listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms").forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
+        listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "plans", "seed-v3").forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
         JSONObject().put("schema", 2).put("tasks", tasks).put("goals", goals).put("projects", projects)
             .put("rules", rules).put("logs", logs).put("settings", meta).toString(2)
     }
@@ -610,6 +702,8 @@ class Repository(private val context: Context) {
             }
             root.optJSONObject("settings")?.let { s -> s.keys().forEach { k -> store.put(Meta(k, s.getString(k))) } }
             store.put(Meta("seed-v2", "1"))
+            if (root.optJSONObject("settings")?.has("seed-v3") != true) seedV3()
+            store.put(Meta("seed-v3", "1"))
         }
         ensureDayLocked(Clock.today())
         replanLocked()

@@ -58,6 +58,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -99,7 +100,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import java.time.Instant
@@ -133,12 +136,37 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PlannerTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
+    // Calm blue-grey palette. Every surface role is set so no default tint (pink/purple) leaks in.
     val colors = if (dark) darkColorScheme(
-        primary = Color(0xFFAAC7FF), secondaryContainer = Color(0xFF303B51),
-        background = Color(0xFF13161C), surface = Color(0xFF1D222B),
+        primary = Color(0xFF9CC3E4), onPrimary = Color(0xFF0D2A40),
+        primaryContainer = Color(0xFF274861), onPrimaryContainer = Color(0xFFD3E6F6),
+        secondary = Color(0xFFA9BCCB), onSecondary = Color(0xFF15232E),
+        secondaryContainer = Color(0xFF2E4253), onSecondaryContainer = Color(0xFFD6E5F2),
+        tertiary = Color(0xFF9FCFC3), onTertiary = Color(0xFF0E2D27),
+        background = Color(0xFF121518), onBackground = Color(0xFFE2E6EA),
+        surface = Color(0xFF1A1E22), onSurface = Color(0xFFE2E6EA),
+        surfaceVariant = Color(0xFF2A3036), onSurfaceVariant = Color(0xFFB2BBC4),
+        surfaceTint = Color(0xFF9CC3E4), outline = Color(0xFF6E7881), outlineVariant = Color(0xFF3A4249),
+        surfaceBright = Color(0xFF2A2F34), surfaceDim = Color(0xFF121518),
+        surfaceContainerLowest = Color(0xFF0E1114), surfaceContainerLow = Color(0xFF171B1F),
+        surfaceContainer = Color(0xFF1B1F23), surfaceContainerHigh = Color(0xFF22272C),
+        surfaceContainerHighest = Color(0xFF2A3036),
+        error = Color(0xFFF2B8A8), onError = Color(0xFF4A1A0E),
     ) else lightColorScheme(
-        primary = Color(0xFF245FE5), secondaryContainer = Color(0xFFEAF0FE),
-        background = Color(0xFFF5F7FB),
+        primary = Color(0xFF2F628C), onPrimary = Color(0xFFFFFFFF),
+        primaryContainer = Color(0xFFD3E5F5), onPrimaryContainer = Color(0xFF0B2F4C),
+        secondary = Color(0xFF52606D), onSecondary = Color(0xFFFFFFFF),
+        secondaryContainer = Color(0xFFD9E6F1), onSecondaryContainer = Color(0xFF13273A),
+        tertiary = Color(0xFF3F6E64), onTertiary = Color(0xFFFFFFFF),
+        background = Color(0xFFF3F5F7), onBackground = Color(0xFF1B1F23),
+        surface = Color(0xFFFFFFFF), onSurface = Color(0xFF1B1F23),
+        surfaceVariant = Color(0xFFE3E8ED), onSurfaceVariant = Color(0xFF515C66),
+        surfaceTint = Color(0xFF2F628C), outline = Color(0xFF8A949D), outlineVariant = Color(0xFFCDD4DA),
+        surfaceBright = Color(0xFFFFFFFF), surfaceDim = Color(0xFFE6EAEE),
+        surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFF7F9FA),
+        surfaceContainer = Color(0xFFEEF2F5), surfaceContainerHigh = Color(0xFFE8ECF0),
+        surfaceContainerHighest = Color(0xFFE2E7EB),
+        error = Color(0xFFB4462F), onError = Color(0xFFFFFFFF),
     )
     MaterialTheme(
         colorScheme = colors,
@@ -242,7 +270,12 @@ fun Planner(repo: Repository) {
     val rules by repo.store.rules().collectAsState(initial = emptyList())
     val logs by repo.store.logs().collectAsState(initial = emptyList())
     val metas by repo.store.metas().collectAsState(initial = emptyList())
-    val settings = Settings.from(metas.associate { it.key to it.value })
+    val metaMap = metas.associate { it.key to it.value }
+    val settings = Settings.from(metaMap)
+    val plans = Plans.parse(metaMap["plans"])
+    val audioTree = metaMap["quranAudio"]?.let(Uri::parse)
+    var planEditor by remember { mutableStateOf<Plan?>(null) }
+    var proposals by remember { mutableStateOf(false) }
 
     var tab by remember { mutableIntStateOf(0) }
     var editor by remember { mutableStateOf<Task?>(null) }
@@ -297,6 +330,23 @@ fun Planner(repo: Repository) {
         }
     }
 
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri: Uri? ->
+        if (uri != null) act {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            repo.setSetting("quranAudio", uri.toString())
+            val n = withContext(Dispatchers.IO) { QuranPlayer.pageFiles(context, uri).size }
+            snackbar.showSnackbar("وُجد $n صفحة صوتية في المجلد")
+        }
+    }
+    val playReview: () -> Unit = {
+        act {
+            val tree = audioTree ?: run { folderPicker.launch(null); return@act }
+            val pages = repo.reviewPages()
+            val st = withContext(Dispatchers.IO) { QuranPlayer.play(context, tree, pages) }
+            if (!st.playing) snackbar.showSnackbar(if (pages.isEmpty()) "لا توجد صفحات للمراجعة اليوم" else "لم أجد ملفات الصفحات ${pages.first()}–${pages.last()} في المجلد")
+        }
+    }
+
     val today = Clock.today()
     val todayStr = today.toString()
     val todays = tasks.filter { it.day == todayStr && it.state != "skipped" }.sortedWith(compareBy({ if (it.planned == 0L) Long.MAX_VALUE else it.planned }, { it.created }))
@@ -321,7 +371,18 @@ fun Planner(repo: Repository) {
                     "اليوم" to Icons.Filled.Today, "الأسبوع" to Icons.Filled.DateRange,
                     "الأهداف" to Icons.Filled.Flag, "التقارير" to Icons.Filled.BarChart,
                 ).forEachIndexed { i, (label, icon) ->
-                    NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Icon(icon, contentDescription = null) }, label = { Text(label) })
+                    NavigationBarItem(
+                        selected = tab == i, onClick = { tab = i },
+                        icon = { Icon(icon, contentDescription = null) },
+                        label = { Text(label, fontWeight = if (tab == i) FontWeight.Bold else FontWeight.Normal) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                            indicatorColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    )
                 }
             }
         },
@@ -333,9 +394,11 @@ fun Planner(repo: Repository) {
         ) {
             when (tab) {
                 0 -> todayTab(todays, tasks, late, now, settings, act, repo,
-                    open = { editor = it }, add = { creating = it }, closeDay = { closeDay = true })
+                    open = { editor = it }, add = { creating = it }, closeDay = { closeDay = true },
+                    isReview = { t -> plans.any { it.kind == "review" && t.ruleId == "plan-${it.id}" } }, playReview = playReview)
                 1 -> weekTab(tasks, rules, settings, today, open = { editor = it }, openRule = { ruleEditor = it })
-                2 -> goalsTab(goals, rules, projects, today, openGoal = { goalEditor = it }, add = { creating = it })
+                2 -> goalsTab(goals, rules, projects, plans, today, openGoal = { goalEditor = it }, add = { creating = it },
+                    openPlan = { planEditor = it }, openProposals = { proposals = true })
                 else -> reportsTab(tasks, today, now, backup = { exporter.launch("planner-backup-$todayStr.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) })
             }
         }
@@ -376,6 +439,16 @@ fun Planner(repo: Repository) {
                     sets = 3, workSec = 30, restSec = 180, anchorDay = todayStr, role = "support")
             })
     }
+    planEditor?.let { p ->
+        PlanEditor(p, plans, audioTree != null, today, close = { planEditor = null },
+            save = { np -> act { repo.savePlan(np); planEditor = null } },
+            delete = { act { repo.deletePlan(p.id); planEditor = null } },
+            pickFolder = { folderPicker.launch(null) })
+    }
+    if (proposals) ProposalsSheet(goals, rules, plans, today, close = { proposals = false },
+        acceptGoals = { ids -> act { repo.acceptGoals(ids) } },
+        acceptPlan = { p -> act { repo.savePlan(p.copy(accepted = true)) } },
+        openGoal = { proposals = false; goalEditor = it }, openPlan = { proposals = false; planEditor = it })
     if (settingsOpen) SettingsDialog(settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false, settings.insistent) })
     if (closeDay) CloseDayDialog(todays, now, close = { closeDay = false },
@@ -401,6 +474,7 @@ fun LazyListScope.todayTab(
     todays: List<Task>, all: List<Task>, late: List<Task>, now: Long, settings: Settings,
     act: (suspend () -> Unit) -> Unit, repo: Repository,
     open: (Task) -> Unit, add: (Task) -> Unit, closeDay: () -> Unit,
+    isReview: (Task) -> Boolean, playReview: () -> Unit,
 ) {
     val doneCount = todays.count { it.done }
     val remainingMin = todays.filter { it.open && it.parallelTo == null }.sumOf { (Maths.remaining(it, now) / 60_000).toInt() }
@@ -414,7 +488,10 @@ fun LazyListScope.todayTab(
         }
     }
     val current = currentTask(todays)
-    if (current != null) item { CurrentPanel(current, todays, now, settings, act, repo, open) }
+    if (current != null) item { CurrentPanel(current, todays, now, settings, act, repo, open, isReview(current), playReview) }
+    todays.firstOrNull { it.open && isReview(it) && it.id != current?.id }?.let { r ->
+        item { ReviewPanel(r, playReview) }
+    }
 
     val overflow = todays.filter { it.open && it.overflow }
     if (overflow.isNotEmpty()) item {
@@ -458,7 +535,7 @@ fun LazyListScope.todayTab(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CurrentPanel(t: Task, todays: List<Task>, now: Long, settings: Settings, act: (suspend () -> Unit) -> Unit, repo: Repository, open: (Task) -> Unit) {
+fun CurrentPanel(t: Task, todays: List<Task>, now: Long, settings: Settings, act: (suspend () -> Unit) -> Unit, repo: Repository, open: (Task) -> Unit, review: Boolean, playReview: () -> Unit) {
     val spent = Maths.spent(t, now)
     val remaining = t.minutes * 60_000L - spent
     val timeUp = remaining <= 0
@@ -493,6 +570,7 @@ fun CurrentPanel(t: Task, todays: List<Task>, now: Long, settings: Settings, act
                 }
             }
         }
+        if (review) PlayerControls(playReview)
         if (!timeUp) Action(
             when { t.running -> "إيقاف مؤقت"; t.spent > 0 -> "متابعة"; else -> "بدء" },
             { act { repo.timer(t.id) } }, Modifier.fillMaxWidth(),
@@ -599,7 +677,7 @@ fun LazyListScope.weekTab(tasks: List<Task>, rules: List<Rule>, settings: Settin
             }
         }
     }
-    val recurring = rules.filter { it.kind != "training" || it.active }
+    val recurring = rules.filter { !it.id.startsWith("plan-") && (it.kind != "training" || it.active) }
     if (recurring.isNotEmpty()) {
         item { Text("المهام المتكررة", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
         items(recurring, key = { "rule-${it.id}" }) { r ->
@@ -625,8 +703,27 @@ fun ruleSummary(r: Rule): String = buildList {
 // ---------------- Goals ----------------
 
 @OptIn(ExperimentalLayoutApi::class)
-fun LazyListScope.goalsTab(goals: List<Goal>, rules: List<Rule>, projects: List<Project>, today: LocalDate, openGoal: (Goal) -> Unit, add: (Task) -> Unit) {
-    item { Text("الأهداف الرياضية · ${goals.size}", style = MaterialTheme.typography.titleMedium) }
+fun LazyListScope.goalsTab(
+    goals: List<Goal>, rules: List<Rule>, projects: List<Project>, plans: List<Plan>, today: LocalDate,
+    openGoal: (Goal) -> Unit, add: (Task) -> Unit, openPlan: (Plan) -> Unit, openProposals: () -> Unit,
+) {
+    val pending = pendingProposals(goals, rules, plans)
+    item {
+        Panel {
+            Text("الخطة السنوية", style = MaterialTheme.typography.titleMedium)
+            Muted("الهدف السنوي يُقسَّم تلقائياً إلى خطة شهر وأسبوع ويوم. وافق عليها أو عدّلها.")
+            if (pending > 0) Action("مراجعة الاقتراحات · $pending", openProposals, Modifier.fillMaxWidth())
+            else Secondary("عرض الخطة", openProposals, Modifier.fillMaxWidth())
+        }
+    }
+    item { Text("القرآن والقراءة", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp)) }
+    items(plans, key = { "plan-${it.id}" }) { p -> PlanCard(p, plans, today) { openPlan(p) } }
+    item {
+        Secondary("+ خطة كمية (كتاب، دورة…)", {
+            openPlan(Plan(id = java.util.UUID.randomUUID().toString(), title = "", kind = "amount", total = 300, minutesPerUnit = 2, unit = "صفحة"))
+        }, Modifier.fillMaxWidth())
+    }
+    item { Text("الأهداف الرياضية · ${goals.size}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp)) }
     items(goals, key = { it.id }) { g ->
         val pct = Maths.achievement(g)
         val baseline = Scheduler.achievement(g.baseline, g.reference, g.lower)
@@ -992,7 +1089,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.2.0")
+        Muted("الإصدار 0.3.0")
     }
     pick?.let { key ->
         TimeDialog(if (key == "dayStart") s.dayStart else s.dayEnd, { pick = null }) { v ->
@@ -1017,5 +1114,195 @@ fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, moveAll: ()
             Action("نقل غير المنجز للغد", moveAll, Modifier.fillMaxWidth())
             Muted("المهام المتكررة غير المبدوءة لا تُنقل؛ تظهر في موعدها التالي.")
         }
+    }
+}
+
+// ---------------- Plans (yearly → month / week / day) ----------------
+
+fun pendingProposals(goals: List<Goal>, rules: List<Rule>, plans: List<Plan>): Int =
+    plans.count { !it.accepted } + goals.count { g -> rules.any { it.goalId == g.id && it.role == "main" && !it.active } }
+
+fun planToday(p: Plan, plans: List<Plan>, today: LocalDate): PageRange? =
+    PlanMath.today(p, today, plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0)
+
+@Composable
+fun PlanCard(p: Plan, plans: List<Plan>, today: LocalDate, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(p.title.ifEmpty { "خطة" }, style = MaterialTheme.typography.titleMedium)
+            if (!p.configured) {
+                Text("اضغط لتحديد وين وصلت", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+                return@Column
+            }
+            if (p.kind == "memorize" || p.kind == "amount") {
+                Text("${p.done} / ${p.total} ${p.unit}", style = MaterialTheme.typography.bodyLarge)
+                LinearProgressIndicator(progress = { (p.done.toFloat() / p.total.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+            }
+            val r = planToday(p, plans, today)
+            Text(if (r != null) "اليوم: ${PlanMath.title(p, r)}" else "لا شيء لليوم", style = MaterialTheme.typography.bodyLarge)
+            val s = PlanMath.suggestion(p, today)
+            if (p.kind == "memorize" || p.kind == "amount") {
+                Muted("هذا الأسبوع: ${s.week} · هذا الشهر: ${s.month} ${p.unit}")
+                s.projectedEnd?.let { Muted("الانتهاء المتوقع: $it") }
+            }
+            if (p.kind == "read") Muted("ختمة كل ${(MUSHAF_PAGES + s.perDay - 1) / s.perDay.coerceAtLeast(1)} يوماً تقريباً")
+            if (p.kind == "review") Muted("كل المحفوظ يُسمَع مرة كل ${p.cycleDays} أيام")
+            if (!p.accepted) Text("بانتظار موافقتك", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+fun PlanEditor(p: Plan, plans: List<Plan>, hasFolder: Boolean, today: LocalDate, close: () -> Unit, save: (Plan) -> Unit, delete: () -> Unit, pickFolder: () -> Unit) {
+    var title by remember { mutableStateOf(p.title) }
+    var unit by remember { mutableStateOf(p.unit) }
+    var total by remember { mutableStateOf(p.total.toString()) }
+    var done by remember { mutableStateOf(p.done.toString()) }
+    var pointer by remember { mutableStateOf(p.pointer.toString()) }
+    var startPage by remember { mutableStateOf(p.startPage.toString()) }
+    var perDay by remember { mutableStateOf(if (p.perDay > 0) p.perDay.toString() else "") }
+    var months by remember {
+        mutableStateOf(java.time.temporal.ChronoUnit.MONTHS.between(today, LocalDate.parse(p.endDay)).coerceAtLeast(1).toString())
+    }
+    var cycle by remember { mutableStateOf(p.cycleDays.toString()) }
+    var perUnit by remember { mutableStateOf(p.minutesPerUnit.toString()) }
+
+    fun n(s: String) = digits(s).toIntOrNull()
+    val candidate = p.copy(
+        title = title.trim(), unit = unit.trim().ifEmpty { "صفحة" },
+        total = (n(total) ?: p.total).coerceIn(1, 100_000),
+        done = (n(done) ?: 0).coerceIn(0, n(total) ?: p.total),
+        pointer = (n(pointer) ?: 1).coerceIn(1, MUSHAF_PAGES),
+        startPage = (n(startPage) ?: 1).coerceIn(1, MUSHAF_PAGES),
+        perDay = (n(perDay) ?: 0).coerceIn(0, 1000),
+        endDay = today.plusMonths((n(months) ?: 12).coerceIn(1, 120).toLong()).toString(),
+        cycleDays = (n(cycle) ?: 7).coerceIn(1, 365),
+        minutesPerUnit = (n(perUnit) ?: p.minutesPerUnit).coerceIn(1, 240),
+        configured = true,
+    )
+    val memorized = plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0
+    Sheet(p.title.ifEmpty { "خطة جديدة" }, close) {
+        when (p.kind) {
+            "memorize" -> {
+                Field(done, "آخر صفحة حفظتها", { done = it }, numeric = true)
+                Field(perDay, "صفحات جديدة يومياً (فارغ = مقترح)", { perDay = it }, numeric = true)
+                Field(months, "أنهي الحفظ خلال كم شهر", { months = it }, numeric = true)
+                Field(perUnit, "دقائق الحفظ لكل صفحة", { perUnit = it }, numeric = true)
+            }
+            "read" -> {
+                Field(pointer, "الصفحة التي تبدأ منها", { pointer = it }, numeric = true)
+                Field(perDay, "عدد الصفحات يومياً", { perDay = it }, numeric = true)
+                Field(perUnit, "دقائق لكل صفحة", { perUnit = it }, numeric = true)
+            }
+            "review" -> {
+                Text(if (memorized > 0) "المحفوظ حالياً: حتى صفحة $memorized" else "حدّد خطة الحفظ أولاً حتى تُعرف صفحات المراجعة.", style = MaterialTheme.typography.bodyLarge)
+                Field(cycle, "أسمع كل المحفوظ مرة كل كم يوم", { cycle = it }, numeric = true)
+                Field(pointer, "الصفحة التالية للمراجعة", { pointer = it }, numeric = true)
+                Field(perUnit, "دقائق السماع لكل صفحة", { perUnit = it }, numeric = true)
+                Secondary(if (hasFolder) "تغيير مجلد الصفحات الصوتية" else "اختيار مجلد الصفحات الصوتية", pickFolder, Modifier.fillMaxWidth())
+                Muted("اسم كل ملف فيه رقم الصفحة، مثل 001.mp3")
+            }
+            else -> {
+                Field(title, "اسم الخطة", { title = it })
+                Field(unit, "الوحدة (صفحة، درس…)", { unit = it })
+                Field(total, "المجموع", { total = it }, numeric = true)
+                Field(done, "المنجز حتى الآن", { done = it }, numeric = true)
+                Field(perDay, "يومياً (فارغ = مقترح)", { perDay = it }, numeric = true)
+                Field(months, "خلال كم شهر", { months = it }, numeric = true)
+                Field(perUnit, "دقائق لكل وحدة", { perUnit = it }, numeric = true)
+            }
+        }
+        HorizontalDivider()
+        Text("الاقتراح", style = MaterialTheme.typography.titleMedium)
+        val s = PlanMath.suggestion(candidate, today)
+        val r = PlanMath.today(candidate, today, if (p.kind == "review") memorized else 0)
+        if (p.kind == "memorize" || p.kind == "amount") {
+            Text("يومياً: ${s.perDay} ${candidate.unit}" + if (candidate.perDay == 0) " (مقترح)" else "", style = MaterialTheme.typography.bodyLarge)
+            Text("هذا الأسبوع: ${s.week} · هذا الشهر: ${s.month}", style = MaterialTheme.typography.bodyLarge)
+            s.projectedEnd?.let { Text("الانتهاء المتوقع: $it", style = MaterialTheme.typography.bodyLarge) }
+        }
+        Text(if (r != null) "اليوم: ${PlanMath.title(candidate, r)} · ${PlanMath.minutes(candidate, r)} دقيقة" else "لا شيء لليوم", style = MaterialTheme.typography.bodyLarge)
+        val valid = p.kind != "amount" || candidate.title.isNotEmpty()
+        Action(if (p.accepted) "حفظ" else "قبول الخطة", { save(candidate.copy(accepted = true)) }, Modifier.fillMaxWidth(), enabled = valid)
+        if (p.accepted) Secondary("إيقاف الخطة", { save(candidate.copy(accepted = false)) }, Modifier.fillMaxWidth())
+        if (p.kind == "amount" && p.title.isNotEmpty()) Secondary("حذف الخطة", delete, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+fun ProposalsSheet(
+    goals: List<Goal>, rules: List<Rule>, plans: List<Plan>, today: LocalDate, close: () -> Unit,
+    acceptGoals: (List<String>) -> Unit, acceptPlan: (Plan) -> Unit, openGoal: (Goal) -> Unit, openPlan: (Plan) -> Unit,
+) {
+    val monthEnd = PlanMath.endOfMonth(today)
+    val weekEnd = PlanMath.endOfWeek(today)
+    Sheet("الخطة السنوية", close) {
+        Text("القرآن والقراءة", style = MaterialTheme.typography.titleMedium)
+        plans.forEach { p ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(p.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                if (p.configured) {
+                    val s = PlanMath.suggestion(p, today)
+                    val r = planToday(p, plans, today)
+                    if (p.kind == "memorize" || p.kind == "amount") Muted("الشهر: ${s.month} · الأسبوع: ${s.week} · اليوم: ${s.perDay} ${p.unit}")
+                    r?.let { Muted("اليوم: ${PlanMath.title(p, it)}") }
+                } else Muted("تحتاج ضبط: وين وصلت")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (p.accepted) Text("مفعّلة", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+                    else if (p.configured) Action("قبول", { acceptPlan(p) })
+                    Secondary(if (p.configured) "تعديل" else "ضبط", { openPlan(p) })
+                }
+            }
+            HorizontalDivider()
+        }
+        Text("الأهداف الرياضية", style = MaterialTheme.typography.titleMedium)
+        val pendingGoals = goals.filter { g -> rules.any { it.goalId == g.id && it.role == "main" && !it.active } }
+        if (pendingGoals.isNotEmpty()) Action("قبول كل الأهداف الرياضية · ${pendingGoals.size}", { acceptGoals(pendingGoals.map { it.id }) }, Modifier.fillMaxWidth())
+        goals.forEach { g ->
+            val start = LocalDate.parse(g.startDay); val target = LocalDate.parse(g.targetDay)
+            val m = PlanMath.goalValueAt(g.baseline, g.reference, start, target, monthEnd)
+            val w = PlanMath.goalValueAt(g.baseline, g.reference, start, target, weekEnd)
+            val main = rules.firstOrNull { it.goalId == g.id && it.role == "main" }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(g.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                Muted("السنة: ${num(g.reference)} · الشهر: ${num(m)} · الأسبوع: ${num(w)} ${g.unit}")
+                main?.let { Muted("اليوم: جلسة كل ${it.everyHours} ساعة · ${it.minutes} دقيقة") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (main?.active == true) Text("مفعّلة", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
+                    else if (main != null) Action("قبول", { acceptGoals(listOf(g.id)) })
+                    Secondary("تعديل", { openGoal(g) })
+                }
+            }
+            HorizontalDivider()
+        }
+    }
+}
+
+// ---------------- Quran review player ----------------
+
+@Composable
+fun PlayerControls(playReview: () -> Unit) {
+    val context = LocalContext.current
+    val st by QuranPlayer.state.collectAsState()
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (st.playing) {
+            Text("يُشغَّل: صفحة ${st.page} · ${st.index + 1} من ${st.count}", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Secondary("التالي", { QuranPlayer.next(context) }, Modifier.weight(1f))
+                Secondary("إيقاف", { QuranPlayer.stop(context) }, Modifier.weight(1f))
+            }
+        } else {
+            if (st.finished) Text("انتهى سماع صفحات اليوم", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            Secondary("تشغيل صفحات المراجعة", playReview, Modifier.fillMaxWidth())
+        }
+        if (st.missing.isNotEmpty()) Muted("لا يوجد ملف للصفحات: ${st.missing.take(10).joinToString("، ")}")
+    }
+}
+
+@Composable
+fun ReviewPanel(t: Task, playReview: () -> Unit) {
+    Panel {
+        Text(t.title, style = MaterialTheme.typography.titleMedium)
+        PlayerControls(playReview)
     }
 }
