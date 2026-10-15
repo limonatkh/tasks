@@ -1,0 +1,186 @@
+{
+  "schema": 1,
+  "referenceMeaning": "قيم المقارنة التي زوّد بها المستخدم، وليست ادعاءً بأرقام عالمية مطلقة",
+  "goals": [
+    {
+      "id": "sport-1",
+      "name": "Barbell Curl",
+      "category": "Strength",
+      "current": 60,
+      "reference": 90,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-2",
+      "name": "Deadlift",
+      "category": "Strength",
+      "current": 150,
+      "reference": 255,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-3",
+      "name": "Log Lift",
+      "category": "Strength",
+      "current": 55,
+      "reference": 115.5,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-4",
+      "name": "Bench Press (Raw)",
+      "category": "Strength",
+      "current": 80,
+      "reference": 177.5,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-5",
+      "name": "Clean & Jerk",
+      "category": "Strength",
+      "current": 60,
+      "reference": 133.5,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-6",
+      "name": "Snatch",
+      "category": "Strength",
+      "current": 50,
+      "reference": 112.5,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-7",
+      "name": "Squat (Raw)",
+      "category": "Strength",
+      "current": 100,
+      "reference": 245,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-8",
+      "name": "Push-ups (1 Min)",
+      "category": "Calisthenics",
+      "current": 38,
+      "reference": 57,
+      "unit": "reps",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-9",
+      "name": "Knuckle Push-ups",
+      "category": "Calisthenics",
+      "current": 38,
+      "reference": 58.5,
+      "unit": "reps",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-10",
+      "name": "Pull-ups (1 Min)",
+      "category": "Calisthenics",
+      "current": 20,
+      "reference": 34,
+      "unit": "reps",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-11",
+      "name": "Chest Dips (1 Min)",
+      "category": "Calisthenics",
+      "current": 30,
+      "reference": 63,
+      "unit": "reps",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-12",
+      "name": "Weighted Pull-up",
+      "category": "Calisthenics",
+      "current": 17,
+      "reference": 73.3,
+      "unit": "kg",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-13",
+      "name": "Two-Finger Pull-ups",
+      "category": "Calisthenics",
+      "current": 1,
+      "reference": 9.5,
+      "unit": "reps",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-14",
+      "name": "Double Under",
+      "category": "Speed",
+      "current": 120,
+      "reference": 94,
+      "unit": "skips",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-15",
+      "name": "800m Run",
+      "category": "Speed",
+      "current": 200,
+      "reference": 201.8,
+      "unit": "seconds",
+      "direction": "lower"
+    },
+    {
+      "id": "sport-16",
+      "name": "Standing Long Jump",
+      "category": "Speed",
+      "current": 1.8,
+      "reference": 1.9,
+      "unit": "m",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-17",
+      "name": "50m Freestyle Swim",
+      "category": "Speed",
+      "current": 55,
+      "reference": 41.8,
+      "unit": "seconds",
+      "direction": "lower"
+    },
+    {
+      "id": "sport-18",
+      "name": "Most Under Skips",
+      "category": "Speed",
+      "current": 3,
+      "reference": 4,
+      "unit": "times",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-19",
+      "name": "Vertical Jump",
+      "category": "Speed",
+      "current": 0.45,
+      "reference": 0.6,
+      "unit": "m",
+      "direction": "higher"
+    },
+    {
+      "id": "sport-20",
+      "name": "Standing Box Jump",
+      "category": "Speed",
+      "current": 0.55,
+      "reference": 0.8,
+      "unit": "m",
+      "direction": "higher"
+    }
+  ]
+}

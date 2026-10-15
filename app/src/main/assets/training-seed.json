@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "note": "قيم مقترحة قابلة للتعديل. مرور الوقت لا يضمن الاستشفاء.",
+  "sources": {
+    "lift": "Belcher et al. 2019 (CSEP): السرعة في السكوات تعافت خلال 96 ساعة، البنش خلال 24 ساعة، والألم ومؤشرات التلف العضلي احتاجت 48–72 ساعة",
+    "rest": "Senna et al. 2009 (JSSM) وتوصية ACSM: راحة 2–5 دقائق بين مجموعات القوة القصوى",
+    "plyo": "توصيات NSCA لتدريب البلايومترك: 48–72 ساعة بين الجلسات",
+    "hang": "بروتوكول Eva López (Max Hangs): تعلّق 10 ث، 3–5 مجموعات، راحة 3 دقائق، مرتان أسبوعياً، 48–72 ساعة بين الجلسات"
+  },
+  "goals": [
+    {"goal": "sport-1",  "recoveryHours": 48, "sets": 4, "workSec": 45, "restSec": 120, "source": "lift"},
+    {"goal": "sport-2",  "recoveryHours": 72, "sets": 5, "workSec": 45, "restSec": 180, "source": "lift"},
+    {"goal": "sport-3",  "recoveryHours": 72, "sets": 5, "workSec": 45, "restSec": 180, "source": "lift"},
+    {"goal": "sport-4",  "recoveryHours": 48, "sets": 5, "workSec": 45, "restSec": 180, "source": "lift"},
+    {"goal": "sport-5",  "recoveryHours": 72, "sets": 6, "workSec": 30, "restSec": 180, "source": "lift"},
+    {"goal": "sport-6",  "recoveryHours": 72, "sets": 6, "workSec": 30, "restSec": 180, "source": "lift"},
+    {"goal": "sport-7",  "recoveryHours": 72, "sets": 5, "workSec": 45, "restSec": 180, "source": "lift"},
+    {"goal": "sport-8",  "recoveryHours": 48, "sets": 3, "workSec": 60, "restSec": 180, "source": "rest"},
+    {"goal": "sport-9",  "recoveryHours": 48, "sets": 3, "workSec": 60, "restSec": 180, "source": "rest"},
+    {"goal": "sport-10", "recoveryHours": 48, "sets": 3, "workSec": 60, "restSec": 180, "source": "rest"},
+    {"goal": "sport-11", "recoveryHours": 48, "sets": 3, "workSec": 60, "restSec": 180, "source": "rest"},
+    {"goal": "sport-12", "recoveryHours": 48, "sets": 5, "workSec": 30, "restSec": 180, "source": "lift"},
+    {"goal": "sport-13", "recoveryHours": 72, "sets": 4, "workSec": 30, "restSec": 180, "source": "hang",
+      "support": [
+        {"title": "تعلّق أقصى بإصبعين ١٠ ث (Max Hangs)", "sets": 4, "workSec": 10, "restSec": 180, "recoveryHours": 72, "source": "hang"}
+      ]
+    },
+    {"goal": "sport-14", "recoveryHours": 48, "sets": 4, "workSec": 60, "restSec": 120, "source": "plyo"},
+    {"goal": "sport-15", "recoveryHours": 48, "sets": 1, "workSec": 240, "restSec": 0, "source": "rest"},
+    {"goal": "sport-16", "recoveryHours": 72, "sets": 5, "workSec": 20, "restSec": 120, "source": "plyo"},
+    {"goal": "sport-17", "recoveryHours": 48, "sets": 4, "workSec": 60, "restSec": 180, "source": "rest"},
+    {"goal": "sport-18", "recoveryHours": 48, "sets": 5, "workSec": 30, "restSec": 120, "source": "plyo"},
+    {"goal": "sport-19", "recoveryHours": 72, "sets": 5, "workSec": 20, "restSec": 120, "source": "plyo"},
+    {"goal": "sport-20", "recoveryHours": 72, "sets": 5, "workSec": 20, "restSec": 120, "source": "plyo"}
+  ]
+}
