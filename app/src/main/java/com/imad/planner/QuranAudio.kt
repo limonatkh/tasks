@@ -20,8 +20,9 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
-data class PlayerState(val playing: Boolean = false, val page: Int? = null, val index: Int = 0, val count: Int = 0, val missing: List<Int> = emptyList(), val finished: Boolean = false)
+data class PlayerState(val playing: Boolean = false, val page: Int? = null, val index: Int = 0, val count: Int = 0, val missing: List<Int> = emptyList(), val finished: Boolean = false, val taskId: String? = null)
 
 /** Plays the memorized pages for today's review from the user's folder (one audio file per mushaf page). */
 object QuranPlayer {
@@ -64,19 +65,20 @@ object QuranPlayer {
         return out
     }
 
-    fun play(context: Context, tree: Uri, pages: List<Int>): PlayerState {
+    fun play(context: Context, tree: Uri, pages: List<Int>, taskId: String): PlayerState {
         val files = runCatching { pageFiles(context, tree) }.getOrDefault(emptyMap())
         val found = pages.filter { it in files }
         val missing = pages.filter { it !in files }
         if (found.isEmpty()) {
-            val s = PlayerState(missing = missing); update(s); return s
+            val s = PlayerState(missing = missing, taskId = taskId); update(s); return s
         }
         val intent = Intent(context, PlayerService::class.java).setAction(PlayerService.PLAY)
             .putExtra("pages", found.toIntArray())
             .putExtra("uris", found.map { files.getValue(it).toString() }.toTypedArray())
             .putExtra("missing", missing.toIntArray())
+            .putExtra("task", taskId)
         ContextCompat.startForegroundService(context, intent)
-        return PlayerState(true, found.first(), 0, found.size, missing)
+        return PlayerState(true, found.first(), 0, found.size, missing, taskId = taskId)
     }
 
     fun stop(context: Context) {
@@ -94,6 +96,7 @@ class PlayerService : Service() {
     private var uris = arrayOf<String>()
     private var missing = IntArray(0)
     private var index = 0
+    private var taskId: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -103,11 +106,15 @@ class PlayerService : Service() {
                 pages = intent.getIntArrayExtra("pages") ?: IntArray(0)
                 uris = intent.getStringArrayExtra("uris") ?: arrayOf()
                 missing = intent.getIntArrayExtra("missing") ?: IntArray(0)
+                taskId = intent.getStringExtra("task")
                 index = 0
                 foreground()
                 playCurrent()
             }
-            NEXT -> { index++; playCurrent() }
+            NEXT -> {
+                taskId?.let { id -> Alarms.scope.launch { runCatching { Repository.get(applicationContext).reviewPageDone(id) } } }
+                index++; playCurrent()
+            }
             STOP -> finish(false)
             else -> stopSelf()
         }
@@ -139,7 +146,7 @@ class PlayerService : Service() {
     private fun playCurrent() {
         player?.release(); player = null
         if (index >= pages.size) { finish(true); return }
-        QuranPlayer.update(PlayerState(true, pages[index], index, pages.size, missing.toList()))
+        QuranPlayer.update(PlayerState(true, pages[index], index, pages.size, missing.toList(), taskId = taskId))
         getSystemService(NotificationManager::class.java).notify(ID, notification())
         val mp = MediaPlayer()
         player = mp
@@ -148,7 +155,11 @@ class PlayerService : Service() {
             mp.setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setDataSource(this, Uri.parse(uris[index]))
             mp.setOnPreparedListener { it.start() }
-            mp.setOnCompletionListener { index++; playCurrent() }
+            mp.setOnCompletionListener {
+                // Remember the place: the page counts as heard, the next session starts after it.
+                taskId?.let { id -> Alarms.scope.launch { runCatching { Repository.get(applicationContext).reviewPageDone(id) } } }
+                index++; playCurrent()
+            }
             mp.setOnErrorListener { _, _, _ -> index++; playCurrent(); true }
             mp.prepareAsync()
         } catch (_: Exception) {
@@ -158,7 +169,7 @@ class PlayerService : Service() {
 
     private fun finish(done: Boolean) {
         player?.release(); player = null
-        QuranPlayer.update(PlayerState(playing = false, missing = missing.toList(), finished = done))
+        QuranPlayer.update(PlayerState(playing = false, missing = missing.toList(), finished = done, taskId = taskId))
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

@@ -32,6 +32,10 @@ data class Plan(
     val startPage: Int = 1,
     val accepted: Boolean = false,
     val configured: Boolean = false,
+    /** Day whose progress [dayDone] / [dayQuota] refer to. */
+    val dayKey: String = "",
+    val dayDone: Int = 0,
+    val dayQuota: Int = 0,
 )
 
 data class PageRange(val from: Int, val to: Int) {
@@ -126,6 +130,83 @@ object PlanMath {
     }
 
     fun endOfWeek(day: LocalDate): LocalDate = day.plusDays(6L - ((day.dayOfWeek.value + 1) % 7)) // week ends Friday
+
+    fun startOfWeek(day: LocalDate): LocalDate = endOfWeek(day).minusDays(6) // Saturday
+
+    // ---------- daily amounts, used for the schedule ----------
+
+    private fun memorized(p: Plan, memLast: Int) = (memLast - p.startPage + 1).coerceAtLeast(0)
+
+    /** The amount for one day. Memorize/amount: the user's daily number. Review: the user's pages or the cycle share. */
+    fun quota(p: Plan, day: LocalDate, memLast: Int): Int {
+        if (!p.configured) return 0
+        return when (p.kind) {
+            "memorize", "amount" -> minOf(remaining(p), if (p.perDay > 0) p.perDay else suggestedPerDay(p, day))
+            "read" -> if (p.perDay > 0) p.perDay else 10
+            "review" -> {
+                val mem = memorized(p, memLast)
+                when {
+                    mem <= 0 -> 0
+                    p.perDay > 0 -> minOf(p.perDay, mem)
+                    else -> ceil(mem / p.cycleDays.coerceAtLeast(1).toDouble()).toInt().coerceAtLeast(1)
+                }
+            }
+            else -> 0
+        }
+    }
+
+    /** Plan after [n] units are done. */
+    fun applyUnits(p: Plan, n: Int, memLast: Int): Plan = when (p.kind) {
+        "memorize", "amount" -> p.copy(done = minOf(p.total, p.done + n))
+        "read" -> p.copy(pointer = wrap(p.pointer + n, p.total))
+        "review" -> {
+            val mem = memorized(p, memLast)
+            if (mem <= 0) p else {
+                val first = p.startPage
+                val idx = (p.pointer.coerceIn(first, memLast) - first + n).mod(mem)
+                p.copy(pointer = first + idx)
+            }
+        }
+        else -> p
+    }
+
+    /** Memorized pages to listen to, starting [offset] pages after the pointer, wrapping inside the memorized range. */
+    fun reviewPages(p: Plan, offset: Int, count: Int, memLast: Int): List<Int> {
+        val mem = memorized(p, memLast)
+        if (mem <= 0 || count <= 0) return emptyList()
+        val first = p.startPage
+        val start = p.pointer.coerceIn(first, memLast) - first + offset
+        return (0 until count).map { first + (start + it).mod(mem) }
+    }
+
+    /** Title of a phase that covers [count] units, [offset] units after where the plan stands. */
+    fun phaseTitle(p: Plan, offset: Int, count: Int, memLast: Int): String = when (p.kind) {
+        "memorize" -> {
+            val a = p.done + 1 + offset
+            val b = minOf(p.total, a + count - 1)
+            if (count <= 1) "حفظ: صفحة $a" else "حفظ: صفحات $a–$b"
+        }
+        "read" -> "ورد القرآن: $count صفحات (من ص ${wrap(p.pointer + offset, p.total)})"
+        "review" -> {
+            val pg = reviewPages(p, offset, count, memLast)
+            when {
+                pg.isEmpty() -> "سماع المحفوظ"
+                pg.last() >= pg.first() -> "سماع المحفوظ: صفحات ${pg.first()}–${pg.last()}"
+                else -> "سماع المحفوظ: $count صفحة من ص ${pg.first()}"
+            }
+        }
+        else -> {
+            val a = p.done + 1 + offset
+            "${p.title}: ${p.unit} $a–${a + count - 1}"
+        }
+    }
+
+    /** Plan state after [days] days, assuming each day's amount gets done. */
+    fun project(p: Plan, days: Int, memLast: Int, today: LocalDate): Plan {
+        var q = p
+        for (i in 0 until days) q = applyUnits(q, quota(q, today.plusDays(i.toLong()), memLast), memLast)
+        return q
+    }
 
     fun endOfMonth(day: LocalDate): LocalDate = day.with(TemporalAdjusters.lastDayOfMonth())
 }

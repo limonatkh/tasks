@@ -17,6 +17,7 @@ object Plans {
                     minutesPerUnit = o.optInt("minutesPerUnit", 5), cycleDays = o.optInt("cycleDays", 7),
                     pointer = o.optInt("pointer", 1), startPage = o.optInt("startPage", 1),
                     accepted = o.optBoolean("accepted"), configured = o.optBoolean("configured"),
+                    dayKey = o.optString("dayKey"), dayDone = o.optInt("dayDone"), dayQuota = o.optInt("dayQuota"),
                 )
             }
         }.getOrDefault(emptyList())
@@ -30,6 +31,7 @@ object Plans {
                     .put("total", p.total).put("done", p.done).put("perDay", p.perDay).put("endDay", p.endDay)
                     .put("minutesPerUnit", p.minutesPerUnit).put("cycleDays", p.cycleDays).put("pointer", p.pointer)
                     .put("startPage", p.startPage).put("accepted", p.accepted).put("configured", p.configured)
+                    .put("dayKey", p.dayKey).put("dayDone", p.dayDone).put("dayQuota", p.dayQuota)
             )
         }
         return a.toString()

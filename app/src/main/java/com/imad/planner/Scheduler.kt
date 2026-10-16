@@ -4,6 +4,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import kotlin.math.ceil
+import kotlin.math.floor
 
 /**
  * Pure scheduling logic (no Android). All times are minutes from the start of the day.
@@ -26,6 +27,15 @@ data class Item(
     val inProgressStart: Int? = null,
     /** Minutes still left for a task in progress. */
     val remaining: Int? = null,
+    /** Preferred window of the day for this kind of task (soft). */
+    val windowStart: Int? = null,
+    val windowEnd: Int? = null,
+    /** The task must end by this minute (heavy training before 21:00). */
+    val hardEnd: Int? = null,
+    /** 0 = not sport, 1 = light sport, 2 = heavy sport. */
+    val sport: Int = 0,
+    /** Not before this minute (later phases of a split task). */
+    val earliest: Int? = null,
 ) {
     val isTraining get() = sets > 1 && restSec > 0
 }
@@ -45,6 +55,52 @@ data class DayPlan(
 )
 
 data class Window(val startSec: Int, val endSec: Int)
+
+data class Config(
+    val dayStart: Int,
+    val dayEnd: Int,
+    val gap: Int = 5,
+    val maxSports: Int = 3,
+    val maxHeavy: Int = 2,
+    /** Minimum minutes between two sport sessions. */
+    val sportGap: Int = 180,
+)
+
+/** Shape of the user's day: wake, sleep and the boundaries of its parts. */
+data class DayShape(
+    val wake: Int,
+    val sleep: Int,
+    val morning: Int = 180,
+    val workEnd: Int = 15 * 60,
+    val sportEnd: Int = 21 * 60,
+)
+
+data class Win(val start: Int, val end: Int, val hardEnd: Int?)
+
+object Windows {
+    /** Where a task of this category naturally belongs in the day. */
+    fun of(category: String, sport: Int, s: DayShape): Win {
+        val morningEnd = minOf(s.wake + s.morning, s.sleep)
+        return when {
+            category == "sport" && sport >= 2 -> {
+                val end = minOf(s.sportEnd, s.sleep)
+                Win(minOf(maxOf(s.workEnd, s.wake), end), end, end)
+            }
+            category == "sport" -> Win(morningEnd, maxOf(morningEnd, s.sleep - 60), null)
+            category == "quran" || category == "reading" -> Win(s.wake, morningEnd, null)
+            category == "work" -> Win(morningEnd, maxOf(morningEnd, minOf(s.workEnd, s.sleep)), null)
+            else -> Win(morningEnd, s.sleep, null)
+        }
+    }
+
+    /** Later phases of a split task are spread over the day: phase k not before wake + k/n of the day. */
+    fun phaseEarliest(phase: Int, count: Int, s: DayShape): Int? =
+        if (phase <= 0 || count <= 1) null else s.wake + phase * (s.sleep - s.wake) / count
+}
+
+data class Recurring(val id: String, val intervalDays: Int, val heavy: Boolean, val fixedOffset: Int? = null)
+
+data class Share(val pct: Int, val open: Boolean, val doneUnits: Int)
 
 object Scheduler {
     /** Rest windows shorter than this are not used for other tasks (switching cost). */
@@ -75,18 +131,21 @@ object Scheduler {
         return ceil(sec / 60.0).toInt() + warmupMin
     }
 
+    /** Old signature, no sport limits. */
+    fun plan(items: List<Item>, dayStart: Int, dayEnd: Int, earliest: Int, gap: Int): DayPlan =
+        plan(items, Config(dayStart, dayEnd, gap, maxSports = 99, maxHeavy = 99, sportGap = 0), earliest)
+
     /**
      * Plans one day.
-     * @param earliest no flexible task starts before this (dayStart, or "now" for today)
-     * @param gap free minutes kept between consecutive tasks
+     * @param now no flexible task starts before this (dayStart, or "now" for today)
      */
-    fun plan(items: List<Item>, dayStart: Int, dayEnd: Int, earliest: Int, gap: Int): DayPlan {
-        val first = place(items, dayStart, dayEnd, earliest, gap)
+    fun plan(items: List<Item>, cfg: Config, now: Int): DayPlan {
+        val first = place(items, cfg, now)
         // Move light tasks into the rest windows of training sessions.
         val sessions = items.filter { it.isTraining && first.placed[it.id]?.overflow == false }
             .sortedBy { first.placed[it.id]!!.start }
         val candidates = items.filter {
-            it.interruptible && !it.isTraining && it.fixedStart == null && it.inProgressStart == null
+            it.interruptible && !it.isTraining && it.fixedStart == null && it.inProgressStart == null && it.sport == 0
         }.sortedWith(compareByDescending<Item> { it.priority }.thenBy { it.order })
         val absorbed = mutableMapOf<String, String>()
         for (s in sessions) {
@@ -101,7 +160,7 @@ object Scheduler {
             }
         }
         if (absorbed.isEmpty()) return first
-        val second = place(items.filter { it.id !in absorbed }, dayStart, dayEnd, earliest, gap)
+        val second = place(items.filter { it.id !in absorbed }, cfg, now)
         val placed = second.placed.toMutableMap()
         for ((cid, sid) in absorbed) {
             val sp = placed[sid] ?: continue
@@ -114,15 +173,18 @@ object Scheduler {
         return DayPlan(placed, second.overflow, second.conflicts)
     }
 
-    private fun place(items: List<Item>, dayStart: Int, dayEnd: Int, earliest: Int, gap: Int): DayPlan {
+    private fun place(items: List<Item>, cfg: Config, now: Int): DayPlan {
         val busy = mutableListOf<Placed>()
         val placed = linkedMapOf<String, Placed>()
         val conflicts = mutableListOf<Pair<String, String>>()
         val overflow = mutableListOf<String>()
+        val sportOf = items.associate { it.id to it.sport }
 
         fun overlapCheck(p: Placed) {
             for (b in busy) if (p.start < b.end && b.start < p.end) conflicts += b.id to p.id
         }
+        fun sports() = busy.count { (sportOf[it.id] ?: 0) > 0 }
+        fun heavies() = busy.count { (sportOf[it.id] ?: 0) >= 2 }
 
         // 1. Tasks already in progress keep their slot.
         for (it in items.filter { it.inProgressStart != null }) {
@@ -135,21 +197,33 @@ object Scheduler {
             val p = Placed(it.id, it.fixedStart!!, it.fixedStart + it.minutes)
             overlapCheck(p); busy += p; placed[it.id] = p
         }
-        // 3. Flexible tasks: learned-default times first, then by priority and creation order.
+        // 3. Flexible tasks, in the order of where they belong in the day.
+        val floor = maxOf(cfg.dayStart, now)
         val flexible = items.filter { it.inProgressStart == null && it.fixedStart == null }
             .sortedWith(
-                compareBy<Item> { it.preferred ?: Int.MAX_VALUE }
+                compareBy<Item> { it.preferred ?: it.windowStart ?: it.earliest ?: cfg.dayStart }
                     .thenByDescending { it.priority }
                     .thenBy { it.order }
             )
-        val floor = maxOf(dayStart, earliest)
         for (it in flexible) {
-            var start = findSlot(busy, maxOf(floor, it.preferred ?: floor), it.minutes, gap, dayEnd)
-            if (start == null && it.preferred != null) start = findSlot(busy, floor, it.minutes, gap, dayEnd)
+            if (it.sport > 0 && (sports() >= cfg.maxSports || (it.sport >= 2 && heavies() >= cfg.maxHeavy))) {
+                overflow += it.id
+                placed[it.id] = Placed(it.id, floor, floor + it.minutes, overflow = true)
+                continue
+            }
+            val lo = maxOf(floor, it.earliest ?: floor)
+            val limit = minOf(cfg.dayEnd, it.hardEnd ?: cfg.dayEnd)
+            val gapFor: (Placed) -> Int = { b ->
+                if (it.sport > 0 && (sportOf[b.id] ?: 0) > 0) maxOf(cfg.gap, cfg.sportGap) else cfg.gap
+            }
+            var start: Int? = null
+            if (it.preferred != null) start = findSlot(busy, maxOf(lo, it.preferred), it.minutes, limit, gapFor)
+            if (start == null && it.windowStart != null)
+                start = findSlot(busy, maxOf(lo, it.windowStart), it.minutes, minOf(limit, it.windowEnd ?: limit), gapFor)
+            if (start == null) start = findSlot(busy, lo, it.minutes, limit, gapFor)
             if (start == null) {
-                val after = maxOf(floor, (busy.maxOfOrNull { b -> b.end } ?: floor) + gap)
-                val p = Placed(it.id, after, after + it.minutes, overflow = true)
-                overflow += it.id; placed[it.id] = p; busy += p
+                overflow += it.id
+                placed[it.id] = Placed(it.id, lo, lo + it.minutes, overflow = true)
             } else {
                 val p = Placed(it.id, start, start + it.minutes)
                 placed[it.id] = p; busy += p
@@ -158,21 +232,84 @@ object Scheduler {
         return DayPlan(placed, overflow, conflicts)
     }
 
-    /** Earliest start >= [from] where [minutes] fit with [gap] around other tasks and end by [dayEnd]. */
-    fun findSlot(busy: List<Placed>, from: Int, minutes: Int, gap: Int, dayEnd: Int): Int? {
+    /** Earliest start >= [from] where [minutes] fit with the gap around other tasks and end by [end]. */
+    fun findSlot(busy: List<Placed>, from: Int, minutes: Int, end: Int, gapFor: (Placed) -> Int): Int? {
         var t = from
         val sorted = busy.sortedBy { it.start }
         var moved = true
         while (moved) {
             moved = false
             for (b in sorted) {
-                if (t < b.end + gap && t + minutes + gap > b.start) {
-                    t = b.end + gap
+                val g = gapFor(b)
+                if (t < b.end + g && t + minutes + g > b.start) {
+                    t = b.end + g
                     moved = true
                 }
             }
         }
-        return if (t + minutes <= dayEnd) t else null
+        return if (t + minutes <= end) t else null
+    }
+
+    fun findSlot(busy: List<Placed>, from: Int, minutes: Int, gap: Int, dayEnd: Int): Int? =
+        findSlot(busy, from, minutes, dayEnd) { gap }
+
+    // ---------- Spreading sport sessions over days ----------
+
+    /**
+     * Picks a start-day offset for each recurring session so the days are evenly loaded
+     * (heavy sessions weigh more). Items with [Recurring.fixedOffset] are kept where they are.
+     */
+    fun stagger(items: List<Recurring>, horizon: Int = 28): Map<String, Int> {
+        val load = IntArray(horizon)
+        val heavy = IntArray(horizon)
+        fun apply(off: Int, r: Recurring) {
+            var d = off
+            val step = r.intervalDays.coerceAtLeast(1)
+            while (d < horizon) { load[d]++; if (r.heavy) heavy[d]++; d += step }
+        }
+        items.filter { it.fixedOffset != null }.forEach { apply(it.fixedOffset!!.coerceIn(0, horizon - 1), it) }
+        val out = linkedMapOf<String, Int>()
+        val free = items.filter { it.fixedOffset == null }
+            .sortedWith(compareByDescending<Recurring> { it.heavy }.thenByDescending { it.intervalDays }.thenBy { it.id })
+        for (r in free) {
+            val step = r.intervalDays.coerceIn(1, horizon)
+            var best = 0
+            var bestCost = Double.MAX_VALUE
+            for (off in 0 until step) {
+                var cost = off * 0.1
+                var d = off
+                while (d < horizon) {
+                    cost += (load[d] + 1).let { it * it }.toDouble()
+                    if (r.heavy) cost += 3.0 * (heavy[d] + 1).let { it * it }
+                    d += step
+                }
+                if (cost < bestCost) { bestCost = cost; best = off }
+            }
+            out[r.id] = best
+            apply(best, r)
+        }
+        return out
+    }
+
+    // ---------- Splitting a daily amount over phases ----------
+
+    /**
+     * Units for each phase of a split task. Finished phases keep what they did; open phases share
+     * what is left of [quota] by their percentages (largest remainder rounding).
+     */
+    fun allocate(quota: Int, shares: List<Share>): List<Int> {
+        val result = shares.map { it.doneUnits }.toMutableList()
+        val rem = (quota - shares.sumOf { it.doneUnits }).coerceAtLeast(0)
+        val open = shares.indices.filter { shares[it].open }
+        if (open.isEmpty() || rem == 0) return result
+        val total = open.sumOf { shares[it].pct.coerceAtLeast(1) }.toDouble()
+        val raw = open.map { rem * shares[it].pct.coerceAtLeast(1) / total }
+        val base = raw.map { floor(it).toInt() }.toMutableList()
+        var left = rem - base.sum()
+        val order = raw.indices.sortedWith(compareByDescending<Int> { raw[it] - floor(raw[it]) }.thenBy { it })
+        for (i in order) { if (left <= 0) break; base[i]++; left-- }
+        open.forEachIndexed { k, i -> result[i] += base[k] }
+        return result
     }
 
     // ---------- Recurrence ----------
