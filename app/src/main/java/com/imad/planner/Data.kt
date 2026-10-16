@@ -72,6 +72,10 @@ data class Task(
     val doneUnits: Int = 0,
     /** "grp:<id>" for split one-off tasks, or a short note. */
     val note: String = "",
+    /** Allowed inside the work hours. */
+    val atWork: Boolean = false,
+    /** Soft preferred start for today (minute of day), -1 = none. */
+    val preferMin: Int = -1,
 ) {
     val running get() = started > 0
     val done get() = state == "done"
@@ -110,7 +114,26 @@ data class Rule(
     val phases: String = "",
     /** JSON list of exercises for grouped training sessions. */
     val members: String = "",
+    val atWork: Boolean = false,
 )
+
+/** History of a task: started, finished, postponed, moved, notes. */
+@Entity(tableName = "events")
+data class Event(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val taskId: String?,
+    /** The recurring rule, split group or task the event belongs to. */
+    val series: String,
+    val day: String,
+    val at: Long = System.currentTimeMillis(),
+    /** start | pause | finish | postpone | rolled | missed | extend | note */
+    val type: String,
+    val text: String = "",
+    /** Minutes late against the planned time (start/finish), 0 otherwise. */
+    val delayMin: Int = 0,
+)
+
+fun seriesOf(t: Task) = t.ruleId ?: t.note.takeIf { it.startsWith("grp:") } ?: t.id
 
 @Entity(tableName = "goals")
 data class Goal(
@@ -150,6 +173,10 @@ interface Store {
     @Query("SELECT * FROM rules ORDER BY title") fun rules(): Flow<List<Rule>>
     @Query("SELECT * FROM goal_logs ORDER BY day") fun logs(): Flow<List<GoalLog>>
     @Query("SELECT * FROM meta") fun metas(): Flow<List<Meta>>
+    @Query("SELECT * FROM events ORDER BY at") fun events(): Flow<List<Event>>
+    @Query("SELECT * FROM events") suspend fun allEvents(): List<Event>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(e: Event)
+    @Query("DELETE FROM events") suspend fun clearEvents()
 
     @Query("SELECT * FROM tasks") suspend fun allTasks(): List<Task>
     @Query("SELECT * FROM tasks WHERE day = :day") suspend fun tasksOn(day: String): List<Task>
@@ -180,7 +207,7 @@ interface Store {
     @Query("DELETE FROM goal_logs") suspend fun clearLogs()
 }
 
-@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class], version = 2, exportSchema = false)
+@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class, Event::class], version = 3, exportSchema = false)
 abstract class PlannerDb : RoomDatabase() {
     abstract fun store(): Store
 }
@@ -204,6 +231,45 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE tasks ADD COLUMN atWork INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE tasks ADD COLUMN preferMin INTEGER NOT NULL DEFAULT -1")
+        db.execSQL("ALTER TABLE rules ADD COLUMN atWork INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("CREATE TABLE IF NOT EXISTS `events` (`id` TEXT NOT NULL, `taskId` TEXT, `series` TEXT NOT NULL, `day` TEXT NOT NULL, `at` INTEGER NOT NULL, `type` TEXT NOT NULL, `text` TEXT NOT NULL, `delayMin` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+    }
+}
+
+// ---------------- Groups ----------------
+
+/** A group of goals and tasks. [slot]: where in the day it goes (morning | work | evening | any | sport). */
+data class Group(val key: String, val name: String, val slot: String, val atWork: Boolean = false)
+
+object Groups {
+    val defaults = listOf(
+        Group("quran", "القرآن", "morning"), Group("reading", "القراءة", "morning"),
+        Group("work", "الشغل والمشاريع", "work"), Group("sport", "الرياضة", "sport"), Group("other", "أخرى", "any"),
+    )
+    fun parse(text: String?): List<Group> {
+        if (text.isNullOrBlank()) return defaults
+        return runCatching {
+            val a = JSONArray(text)
+            (0 until a.length()).map { i ->
+                val o = a.getJSONObject(i)
+                Group(o.getString("key"), o.getString("name"), o.optString("slot", "any"), o.optBoolean("atWork"))
+            }
+        }.getOrDefault(defaults).ifEmpty { defaults }
+    }
+    fun encode(list: List<Group>): String {
+        val a = JSONArray()
+        list.forEach { g -> a.put(JSONObject().put("key", g.key).put("name", g.name).put("slot", g.slot).put("atWork", g.atWork)) }
+        return a.toString()
+    }
+    fun slotName(slot: String) = when (slot) {
+        "morning" -> "الصبح"; "work" -> "وقت الشغل"; "evening" -> "العصر والمسا"; "sport" -> "حسب شدة التمرين"; else -> "أي وقت"
+    }
+}
+
 // ---------------- Settings ----------------
 
 data class Settings(
@@ -221,12 +287,33 @@ data class Settings(
     val maxSports: Int = 3,
     val maxHeavy: Int = 2,
     val sportGap: Int = 180,
+    /** Work hours (job): nothing is scheduled inside except allowed tasks. */
+    val jobOn: Boolean = false,
+    val jobStart: Int = 9 * 60,
+    val jobEnd: Int = 17 * 60,
+    /** bit 0 Monday … bit 6 Sunday. */
+    val jobDays: Int = 0b0011111 or (1 shl 6),
+    val timerStyle: String = "digital",
+    val groups: List<Group> = Groups.defaults,
 ) {
     val shape get() = DayShape(dayStart, dayEnd, morning, workEnd, sportEnd)
     val config get() = Config(dayStart, dayEnd, gap, maxSports, maxHeavy, sportGap)
 
+    fun jobToday(day: LocalDate) = jobOn && jobEnd > jobStart && (jobDays and Scheduler.weekdayBit(day.dayOfWeek)) != 0
+
+    fun configFor(day: LocalDate) = config.copy(blocks = if (jobToday(day)) listOf(jobStart to jobEnd) else emptyList())
+
+    fun group(key: String): Group? = groups.firstOrNull { it.key == key }
+
+    /** The day part a group goes to; old keys keep their meaning. */
+    fun slotOf(category: String): String = when {
+        category == "sport" -> "sport"
+        else -> group(category)?.slot ?: when (category) { "quran", "reading" -> "morning"; "work" -> "work"; else -> "any" }
+    }
+
     companion object {
-        val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap")
+        val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
+            "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -234,7 +321,10 @@ data class Settings(
                 insistent = m["insistent"]?.let { it == "1" } ?: true, alarms = m["alarms"]?.let { it == "1" } ?: true,
                 morning = i("morning", 180), workEnd = i("workEnd", 15 * 60), sportEnd = i("sportEnd", 21 * 60),
                 maxSports = i("maxSports", 3), maxHeavy = i("maxHeavy", 2), sportGap = i("sportGap", 180),
-            )
+                jobOn = m["jobOn"] == "1", jobStart = i("jobStart", 9 * 60), jobEnd = i("jobEnd", 17 * 60),
+                jobDays = i("jobDays", 0b1011111), timerStyle = m["timerStyle"] ?: "digital",
+                groups = Groups.parse(m["groups"]),
+            ).also { Cat.groups = it.groups }
         }
     }
 }
@@ -263,16 +353,17 @@ object Maths {
 }
 
 object Cat {
-    val keys = listOf("quran", "reading", "work", "sport", "other")
-    fun name(k: String) = when (k) {
-        "quran" -> "القرآن"; "reading" -> "القراءة"; "work" -> "الشغل والمشاريع"; "sport" -> "الرياضة"; else -> "أخرى"
-    }
+    /** Current groups (set whenever settings are read). */
+    @Volatile var groups: List<Group> = Groups.defaults
+    val keys: List<String> get() = groups.map { it.key }
+    fun name(k: String) = groups.firstOrNull { it.key == k }?.name ?: Groups.defaults.firstOrNull { it.key == k }?.name ?: "أخرى"
+    fun known(k: String) = if (k in keys) k else "other".takeIf { it in keys } ?: keys.first()
     fun ofGoal(g: Goal) = when (g.category) {
-        "Strength", "Calisthenics", "Speed" -> "sport"
-        in keys -> g.category
-        else -> "other"
+        "Strength", "Calisthenics", "Speed" -> known("sport")
+        else -> known(g.category)
     }
-    fun ofPlan(p: Plan) = if (p.kind == "amount") "reading" else "quran"
+    fun ofPlan(p: Plan) = known(p.category.ifEmpty { when (p.kind) { "amount" -> "reading"; "cycle" -> "work"; else -> "quran" } })
+    fun ofRule(r: Rule) = known(r.category)
 }
 
 data class Exercise(val goal: String?, val name: String, val sets: Int, val workSec: Int, val restSec: Int)
@@ -343,17 +434,17 @@ object Months {
 }
 
 /** Builds the task(s) of a recurring rule for one day (several when the rule is split into phases). */
-fun buildInstances(r: Rule, day: LocalDate, plan: Plan?, memLast: Int, idOf: (Int) -> String = { UUID.randomUUID().toString() }): List<Task> {
+fun buildInstances(r: Rule, day: LocalDate, plan: Plan?, memLast: Int, monthTarget: Double? = null, idOf: (Int) -> String = { UUID.randomUUID().toString() }): List<Task> {
     val phases = parsePhases(r.phases)
     val n = phases.size
     val pin = r.pinned && r.preferredMinute >= 0
     val base = Task(
         title = r.title, minutes = r.minutes, day = day.toString(), ruleId = r.id, goalId = r.goalId, kind = r.kind,
         sets = r.sets, workSec = r.workSec, restSec = r.restSec, priority = r.priority, interruptible = r.interruptible,
-        category = r.category, sport = r.sport,
+        category = r.category, sport = r.sport, atWork = r.atWork,
     )
     if (plan != null) {
-        val quota = PlanMath.quota(plan, day, memLast)
+        val quota = PlanMath.quotaWithMonth(plan, day, memLast, monthTarget)
         if (quota <= 0) return emptyList()
         val alloc = Scheduler.allocate(quota, phases.map { Share(it, true, 0) })
         var off = 0
@@ -384,12 +475,13 @@ fun buildInstances(r: Rule, day: LocalDate, plan: Plan?, memLast: Int, idOf: (In
 /** Scheduler item for a task. [nowMs]/[nowMin] are null for future days. */
 fun itemOf(t: Task, rules: Map<String, Rule>, s: Settings, nowMs: Long?, nowMin: Int?): Item {
     val inProgress = nowMs != null && (t.running || t.spent > 0)
-    val w = Windows.of(t.category, t.sport, s.shape)
+    val w = Windows.of(s.slotOf(t.category), t.sport, s.shape)
     val e = Windows.phaseEarliest(t.phase, t.phaseCount, s.shape)
     return Item(
         id = t.id, minutes = t.minutes,
         fixedStart = if (t.pinned && t.planned > 0 && !inProgress) Clock.minuteOfDay(t.planned) else null,
-        preferred = if (t.phaseCount == 1 && !t.pinned) t.ruleId?.let { rules[it] }?.preferredMinute?.takeIf { it >= 0 } else null,
+        preferred = if (t.pinned) null else t.preferMin.takeIf { it >= 0 }
+            ?: if (t.phaseCount == 1) t.ruleId?.let { rules[it] }?.preferredMinute?.takeIf { it >= 0 } else null,
         priority = t.priority, interruptible = t.interruptible,
         sets = t.sets, workSec = t.workSec, restSec = t.restSec, order = t.created,
         inProgressStart = if (inProgress) when {
@@ -400,13 +492,14 @@ fun itemOf(t: Task, rules: Map<String, Rule>, s: Settings, nowMs: Long?, nowMin:
         windowStart = if (e != null) maxOf(w.start, e) else w.start,
         windowEnd = if (e != null && e >= w.end) s.dayEnd else w.end,
         hardEnd = w.hardEnd, sport = t.sport, earliest = e,
+        atWork = t.atWork || s.group(t.category)?.atWork == true,
     )
 }
 
 // ---------------- Repository ----------------
 
 class Repository(private val context: Context) {
-    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2).build()
+    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
     val store: Store = db.store()
     private val lock = Mutex()
 
@@ -425,7 +518,77 @@ class Repository(private val context: Context) {
         }
         if (store.meta("seed-v3") == null) { seedV3(); store.put(Meta("seed-v3", "1")) }
         if (store.meta("seed-v4") == null) { seedV4(); store.put(Meta("seed-v4", "1")) }
+        if (store.meta("seed-v5") == null) { seedV5(); store.put(Meta("seed-v5", "1")) }
         ensureDayLocked(Clock.today())
+        replanLocked()
+    }
+
+    /** Version 0.5: projects become yearly plans that move step by step through the week; plans remember where they started. */
+    private suspend fun seedV5() {
+        val today = Clock.today().toString()
+        val plans = plansLocked().map { p -> if (p.startDay.isEmpty()) p.copy(startDay = today, startDone = p.done) else p }.toMutableList()
+        val minutes = mapOf("lemonat" to 90, "history-podcast" to 60, "sports-content" to 60)
+        for (pr in store.allProjects()) {
+            val id = "proj-${pr.id}"
+            if (plans.any { it.id == id }) continue
+            plans += Plan(
+                id = id, title = pr.name, kind = "cycle", unit = "حلقة", total = 52, done = 0, pointer = 0,
+                stages = pr.stages, perWeek = 1.0, minutesPerUnit = minutes[pr.id] ?: 60, category = "work",
+                accepted = true, configured = true, startDay = today, startDone = 0,
+                endDay = Clock.today().plusYears(1).toString(),
+            )
+        }
+        savePlansLocked(plans)
+        for (p in plans.filter { it.kind == "cycle" }) syncPlanRuleLocked(p)
+    }
+
+    /** Keeps the daily rule of a plan in line with it (active, group, interval). */
+    private suspend fun syncPlanRuleLocked(p: Plan, phases: String? = null) {
+        val ruleId = "plan-${p.id}"
+        val existing = store.rule(ruleId)
+        val every = if (p.kind == "cycle") cycleIntervalHours(p) else 24
+        val rule = (existing ?: Rule(id = ruleId, title = p.title, minutes = 15, anchorDay = Clock.today().toString()))
+            .copy(active = p.accepted && p.configured, title = p.title, category = Cat.ofPlan(p), interruptible = p.kind == "review",
+                phases = phases ?: existing?.phases ?: "", everyHours = every)
+        store.put(rule)
+    }
+
+    /** cycle: interval from this month's target if the user set one, else from rounds per week. */
+    private suspend fun cycleIntervalHours(p: Plan): Int {
+        val today = Clock.today()
+        val target = Months.parse(store.meta("months"))[Months.key("p:${p.id}", java.time.YearMonth.from(today).toString())]?.value
+        val eff = if (target != null) p.copy(perWeek = PlanMath.cyclePerWeekForMonth(p, today, target)) else p
+        return PlanMath.cycleIntervalDays(eff) * 24
+    }
+
+    // ---------- history ----------
+
+    private suspend fun log(t: Task, type: String, text: String = "", delay: Int = 0) =
+        store.put(Event(taskId = t.id, series = seriesOf(t), day = t.day, type = type, text = text, delayMin = delay))
+
+    suspend fun addNote(taskId: String, text: String) = lock.withLock {
+        val t = store.task(taskId) ?: return@withLock
+        if (text.isNotBlank()) log(t, "note", text.trim())
+    }
+
+    // ---------- groups ----------
+
+    suspend fun saveGroups(list: List<Group>) = lock.withLock {
+        store.put(Meta("groups", Groups.encode(list)))
+        replanLocked()
+    }
+
+    /** Moves a goal / plan / recurring task to another group. */
+    suspend fun moveToGroup(goalId: String?, planId: String?, ruleId: String?, group: String) = lock.withLock {
+        goalId?.let { id -> store.goal(id)?.let { store.put(it.copy(category = group)) } }
+        planId?.let { id ->
+            val plans = plansLocked().map { if (it.id == id) it.copy(category = group) else it }
+            savePlansLocked(plans)
+            plans.firstOrNull { it.id == id }?.let { syncPlanRuleLocked(it) }
+        }
+        ruleId?.let { id -> store.rule(id)?.let { store.put(it.copy(category = group)) } }
+        store.tasksOn(Clock.today().toString()).filter { it.open && ((ruleId != null && it.ruleId == ruleId) || (planId != null && it.ruleId == "plan-$planId")) }
+            .forEach { store.put(it.copy(category = group)) }
         replanLocked()
     }
 
@@ -568,14 +731,11 @@ class Repository(private val context: Context) {
         val plans = plansLocked()
         val old = plans.firstOrNull { it.id == plan.id }
         var p = plan.copy(dayKey = old?.dayKey ?: "", dayDone = old?.dayDone ?: 0)
-        if (p.dayKey == today.toString()) p = p.copy(dayQuota = PlanMath.quota(p, today, memLastOf(plans.map { if (it.id == p.id) p else it })))
+        if (p.startDay.isEmpty() || (old != null && old.done != p.done && p.kind != "read" && p.kind != "review")) p = p.copy(startDay = today.toString(), startDone = p.done)
+        if (p.dayKey == today.toString()) p = p.copy(dayQuota = PlanMath.quotaWithMonth(p, today, memLastOf(plans.map { if (it.id == p.id) p else it }), monthTargetLocked(p, today)))
         savePlansLocked(plans.filter { it.id != p.id } + p)
         val ruleId = "plan-${p.id}"
-        val existing = store.rule(ruleId)
-        val active = p.accepted && p.configured
-        val rule = (existing ?: Rule(id = ruleId, title = p.title, minutes = 15, anchorDay = today.toString()))
-            .copy(active = active, title = p.title, category = Cat.ofPlan(p), interruptible = p.kind == "review", phases = phases ?: existing?.phases ?: "")
-        store.put(rule)
+        syncPlanRuleLocked(p, phases)
         store.tasksOn(today.toString()).filter { it.ruleId == ruleId && it.open && !it.running && it.spent == 0L && it.doneUnits == 0 }
             .forEach { store.delete(it.id) }
         ensureDayLocked(today)
@@ -604,7 +764,23 @@ class Repository(private val context: Context) {
         val m = Months.parse(store.meta("months")).toMutableMap()
         if (value == null && !reviewed) m.remove(Months.key(goalKey, ym)) else m[Months.key(goalKey, ym)] = MonthEntry(value, reviewed)
         store.put(Meta("months", Months.encode(m)))
+        // This month's target changes the daily amounts / pace from today on.
+        if (goalKey.startsWith("p:") && ym == java.time.YearMonth.from(Clock.today()).toString()) {
+            val today = Clock.today()
+            val plans = plansLocked()
+            val p = plans.firstOrNull { "p:${it.id}" == goalKey } ?: return@withLock
+            if (p.kind == "cycle") syncPlanRuleLocked(p)
+            if (p.dayKey == today.toString()) savePlansLocked(plans.map {
+                if (it.id == p.id) it.copy(dayQuota = PlanMath.quotaWithMonth(it, today, memLastOf(plans), monthTargetLocked(it, today))) else it
+            })
+            store.allTasks().filter { it.ruleId == "plan-${p.id}" && it.day > today.toString() && it.open && it.spent == 0L }.forEach { store.delete(it.id) }
+            ensureDayLocked(today)
+            replanLocked()
+        }
     }
+
+    private suspend fun monthTargetLocked(p: Plan, day: LocalDate): Double? =
+        Months.parse(store.meta("months"))[Months.key("p:${p.id}", java.time.YearMonth.from(day).toString())]?.value
 
     suspend fun acceptMonths(goalKey: String, yms: List<String>) = lock.withLock {
         val m = Months.parse(store.meta("months")).toMutableMap()
@@ -628,11 +804,11 @@ class Repository(private val context: Context) {
             val last = listOfNotNull(r.lastDoneDay, instLast).maxOrNull()?.let(LocalDate::parse)
             if (only == null && !Scheduler.isDue(r.everyHours, r.weekdays, LocalDate.parse(r.anchorDay), last, day)) continue
             if (day == today) all.filter { it.ruleId == r.id && it.open && it.day < ds && !it.running }
-                .forEach { store.put(it.copy(state = "skipped")) }
+                .forEach { store.put(it.copy(state = "skipped")); log(it, "missed") }
             val plan = if (r.id.startsWith("plan-")) plans.firstOrNull { "plan-${it.id}" == r.id } else null
             val simPlan = plan?.let { PlanMath.project(it, ChronoUnit.DAYS.between(today, day).toInt().coerceAtLeast(0), mem, today) }
             if (r.id.startsWith("plan-") && simPlan == null) continue
-            val inst = buildInstances(r, day, simPlan, mem)
+            val inst = buildInstances(r, day, simPlan, mem, simPlan?.let { monthTargetLocked(it, day) })
             if (inst.isEmpty()) continue
             store.putAll(inst); created += inst
         }
@@ -688,7 +864,7 @@ class Repository(private val context: Context) {
         val mem = memLastOf(plans)
         var changed = false
         plans = plans.map { p ->
-            if (p.configured && p.dayKey != ts) { changed = true; p.copy(dayKey = ts, dayDone = 0, dayQuota = PlanMath.quota(p, today, mem)) } else p
+            if (p.configured && p.dayKey != ts) { changed = true; p.copy(dayKey = ts, dayDone = 0, dayQuota = PlanMath.quotaWithMonth(p, today, mem, monthTargetLocked(p, today))) } else p
         }
         if (changed) savePlansLocked(plans)
         val tasks = store.tasksOn(ts).filter { it.isPlan }
@@ -729,7 +905,7 @@ class Repository(private val context: Context) {
         val tasks = store.tasksOn(ts)
         val rules = store.allRules().associateBy { it.id }
         val items = tasks.filter { it.open }.map { itemOf(it, rules, s, now, nowMin) }
-        val plan = Scheduler.plan(items, s.config, nowMin)
+        val plan = Scheduler.plan(items, s.configFor(today), nowMin)
         val tomorrow = today.plusDays(1).toString()
         val updated = tasks.map { t ->
             val p = plan.placed[t.id] ?: return@map t.copy(parallelTo = null, overflow = false)
@@ -747,6 +923,7 @@ class Repository(private val context: Context) {
             )
         }
         store.putAll(updated)
+        for ((old, new) in tasks.zip(updated)) if (old.open && (new.state == "skipped" || new.day != old.day)) log(old, "rolled", "ما وسعها اليوم")
         Alarms.reschedule(context, updated.filter { it.day == ts }, s)
     }
 
@@ -818,14 +995,35 @@ class Repository(private val context: Context) {
         val now = System.currentTimeMillis()
         val t = store.task(id) ?: return@withLock
         if (t.running) {
-            store.put(t.copy(spent = Maths.spent(t, now), started = 0))
+            store.put(t.copy(spent = Maths.spent(t, now), started = 0)); log(t, "pause")
         } else {
             if (!t.open) return@withLock
-            store.allTasks().filter { it.running && it.id != id }
-                .forEach { store.put(it.copy(spent = Maths.spent(it, now), started = 0)) }
-            if (Maths.remaining(t, now) <= 0) return@withLock
-            store.put(t.copy(started = now, day = Clock.today().toString(), planned = if (t.spent == 0L) now else t.planned))
+            startLocked(t, now)
         }
+        replanLocked()
+    }
+
+    private suspend fun startLocked(t: Task, now: Long) {
+        store.allTasks().filter { it.running && it.id != t.id }
+            .forEach { store.put(it.copy(spent = Maths.spent(it, now), started = 0)); log(it, "pause") }
+        if (Maths.remaining(t, now) <= 0) return
+        if (t.spent == 0L) log(t, "start", delay = if (t.planned > 0) ((now - t.planned) / 60_000).toInt() else 0)
+        store.put(t.copy(started = now, day = Clock.today().toString(), planned = if (t.spent == 0L) now else t.planned))
+    }
+
+    /** Starts [id] right now; the task that was due now takes its place in the day. */
+    suspend fun startNow(id: String) = lock.withLock {
+        val now = System.currentTimeMillis()
+        val t = store.task(id) ?: return@withLock
+        if (!t.open) return@withLock
+        val todays = store.tasksOn(Clock.today().toString()).filter { it.open && it.id != id && it.parallelTo == null }
+        val displaced = todays.firstOrNull { it.running }
+            ?: todays.filter { it.spent == 0L && it.planned > 0 }.minByOrNull { it.planned }
+        if (displaced != null && !displaced.pinned && t.planned > 0) {
+            store.put(displaced.copy(preferMin = Clock.minuteOfDay(t.planned)))
+            log(displaced, "postpone", "بدأت «${t.baseTitle}» بداله")
+        }
+        startLocked(store.task(id) ?: t, now)
         replanLocked()
     }
 
@@ -845,6 +1043,7 @@ class Repository(private val context: Context) {
             store.put(t.copy(state = "done", spent = Maths.spent(t, now), started = 0, finishedAt = now))
         }
         t.ruleId?.let { rid -> store.rule(rid)?.let { store.put(it.copy(lastDoneDay = maxOf(t.day, it.lastDoneDay ?: ""))) } }
+        log(t, "finish", delay = if (t.planned > 0) ((now - t.planned - t.minutes * 60_000L) / 60_000).toInt() else 0)
         replanLocked()
     }
 
@@ -880,13 +1079,15 @@ class Repository(private val context: Context) {
     suspend fun extend(id: String, minutes: Int) = lock.withLock {
         val t = store.task(id) ?: return@withLock
         store.put(t.copy(minutes = (t.minutes + minutes).coerceAtMost(10080)))
+        log(t, "extend", "+$minutes د")
         replanLocked()
     }
 
     /** Moves the task to tomorrow; the scheduler places it there automatically. */
-    suspend fun postpone(id: String) = lock.withLock {
+    suspend fun postpone(id: String, reason: String = "") = lock.withLock {
         val now = System.currentTimeMillis()
         val t = store.task(id) ?: return@withLock
+        log(t, "postpone", reason.trim())
         val tomorrow = LocalDate.parse(t.day).coerceAtLeast(Clock.today()).plusDays(1)
         store.put(
             t.copy(
@@ -966,6 +1167,7 @@ class Repository(private val context: Context) {
                     .put("sets", t.sets).put("workSec", t.workSec).put("restSec", t.restSec).put("created", t.created)
                     .put("finishedAt", t.finishedAt).put("category", t.category).put("sport", t.sport).put("phase", t.phase)
                     .put("phaseCount", t.phaseCount).put("pct", t.pct).put("units", t.units).put("doneUnits", t.doneUnits).put("note", t.note)
+                    .put("atWork", t.atWork).put("preferMin", t.preferMin)
             )
         }
         val goals = JSONArray()
@@ -987,25 +1189,30 @@ class Repository(private val context: Context) {
                     .put("goalId", r.goalId ?: JSONObject.NULL).put("sets", r.sets).put("workSec", r.workSec)
                     .put("restSec", r.restSec).put("active", r.active).put("anchorDay", r.anchorDay)
                     .put("lastDoneDay", r.lastDoneDay ?: JSONObject.NULL).put("source", r.source).put("role", r.role)
-                    .put("category", r.category).put("sport", r.sport).put("phases", r.phases).put("members", r.members)
+                    .put("category", r.category).put("sport", r.sport).put("phases", r.phases).put("members", r.members).put("atWork", r.atWork)
             )
         }
         val logs = JSONArray()
         store.allLogs().forEach { l -> logs.put(JSONObject().put("id", l.id).put("goalId", l.goalId).put("day", l.day).put("value", l.value)) }
         val meta = JSONObject()
-        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
-        JSONObject().put("schema", 3).put("tasks", tasks).put("goals", goals).put("projects", projects)
-            .put("rules", rules).put("logs", logs).put("settings", meta).toString(2)
+        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
+        val events = JSONArray()
+        store.allEvents().forEach { e ->
+            events.put(JSONObject().put("id", e.id).put("taskId", e.taskId ?: JSONObject.NULL).put("series", e.series).put("day", e.day)
+                .put("at", e.at).put("type", e.type).put("text", e.text).put("delayMin", e.delayMin))
+        }
+        JSONObject().put("schema", 4).put("tasks", tasks).put("goals", goals).put("projects", projects)
+            .put("rules", rules).put("logs", logs).put("events", events).put("settings", meta).toString(2)
     }
 
     /** Accepts backups of every version of the app. */
     suspend fun restore(text: String) = lock.withLock {
         val root = JSONObject(text)
         val schema = root.optInt("schema", 1)
-        require(schema in 1..3) { "صيغة غير معروفة" }
+        require(schema in 1..4) { "صيغة غير معروفة" }
         fun JSONObject.str(k: String): String? = if (!has(k) || isNull(k)) null else getString(k)
         db.withTransaction {
-            store.clearTasks(); store.clearGoals(); store.clearProjects(); store.clearRules(); store.clearLogs()
+            store.clearTasks(); store.clearGoals(); store.clearProjects(); store.clearRules(); store.clearLogs(); store.clearEvents()
             val tasks = root.optJSONArray("tasks") ?: JSONArray()
             for (i in 0 until tasks.length()) {
                 val o = tasks.getJSONObject(i)
@@ -1025,6 +1232,7 @@ class Repository(private val context: Context) {
                         finishedAt = o.optLong("finishedAt"), category = o.optString("category", "other"),
                         sport = o.optInt("sport"), phase = o.optInt("phase"), phaseCount = o.optInt("phaseCount", 1),
                         pct = o.optInt("pct", 100), units = o.optInt("units"), doneUnits = o.optInt("doneUnits"), note = o.optString("note"),
+                        atWork = o.optBoolean("atWork"), preferMin = o.optInt("preferMin", -1),
                     )
                 )
             }
@@ -1060,7 +1268,7 @@ class Repository(private val context: Context) {
                         anchorDay = o.optString("anchorDay", Clock.today().toString()), lastDoneDay = o.str("lastDoneDay"),
                         source = o.optString("source"), role = o.optString("role", "main"),
                         category = o.optString("category", "other"), sport = o.optInt("sport"),
-                        phases = o.optString("phases"), members = o.optString("members"),
+                        phases = o.optString("phases"), members = o.optString("members"), atWork = o.optBoolean("atWork"),
                     )
                 )
             }
@@ -1075,6 +1283,12 @@ class Repository(private val context: Context) {
             store.put(Meta("seed-v2", "1"))
             if (settings?.has("seed-v3") != true) { seedV3(); store.put(Meta("seed-v3", "1")) }
             if (settings?.has("seed-v4") != true) { seedV4(); store.put(Meta("seed-v4", "1")) }
+            val events = root.optJSONArray("events") ?: JSONArray()
+            for (i in 0 until events.length()) {
+                val o = events.getJSONObject(i)
+                store.put(Event(o.getString("id"), o.str("taskId"), o.getString("series"), o.getString("day"), o.getLong("at"), o.getString("type"), o.optString("text"), o.optInt("delayMin")))
+            }
+            if (settings?.has("seed-v5") != true) { seedV5(); store.put(Meta("seed-v5", "1")) }
         }
         ensureDayLocked(Clock.today())
         replanLocked()

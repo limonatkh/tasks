@@ -69,48 +69,54 @@ import kotlin.math.sin
 
 // ---------------- Theme ----------------
 
+/** Button colour of the phone's clock app ("Start"). */
+val Salmon = Color(0xFFEF9083)
+
 @Composable
 fun PlannerTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
-    // Calm blue-grey palette. Every surface role is set so no default tint (pink/purple) leaks in.
+    // Colours of the Samsung clock app: warm off-white / black, brick-red accent, khaki secondary text, salmon buttons.
     val colors = if (dark) darkColorScheme(
-        primary = Color(0xFF9CC3E4), onPrimary = Color(0xFF0D2A40),
-        primaryContainer = Color(0xFF274861), onPrimaryContainer = Color(0xFFD3E6F6),
-        secondary = Color(0xFFA9BCCB), onSecondary = Color(0xFF15232E),
-        secondaryContainer = Color(0xFF2E4253), onSecondaryContainer = Color(0xFFD6E5F2),
-        tertiary = Color(0xFF9FCFC3), onTertiary = Color(0xFF0E2D27),
-        tertiaryContainer = Color(0xFF2B4A43), onTertiaryContainer = Color(0xFFCDEDE4),
-        background = Color(0xFF121518), onBackground = Color(0xFFE2E6EA),
-        surface = Color(0xFF1A1E22), onSurface = Color(0xFFE2E6EA),
-        surfaceVariant = Color(0xFF2A3036), onSurfaceVariant = Color(0xFFB2BBC4),
-        surfaceTint = Color(0xFF9CC3E4), outline = Color(0xFF6E7881), outlineVariant = Color(0xFF3A4249),
-        surfaceBright = Color(0xFF2A2F34), surfaceDim = Color(0xFF121518),
-        surfaceContainerLowest = Color(0xFF0E1114), surfaceContainerLow = Color(0xFF171B1F),
-        surfaceContainer = Color(0xFF1B1F23), surfaceContainerHigh = Color(0xFF22272C),
-        surfaceContainerHighest = Color(0xFF2A3036),
-        error = Color(0xFFF2B8A8), onError = Color(0xFF4A1A0E),
+        primary = Color(0xFFF4B4A7), onPrimary = Color(0xFF3A0E07),
+        primaryContainer = Color(0xFF4A2A24), onPrimaryContainer = Color(0xFFFADBD4),
+        secondary = Color(0xFFB6B09F), onSecondary = Color(0xFF1E1D1A),
+        secondaryContainer = Color(0xFF2A2925), onSecondaryContainer = Color(0xFFE6E2D6),
+        tertiary = Color(0xFFB6B09F), onTertiary = Color(0xFF1E1D1A),
+        tertiaryContainer = Color(0xFF34322C), onTertiaryContainer = Color(0xFFE6E2D6),
+        background = Color(0xFF000000), onBackground = Color(0xFFF2F2F2),
+        surface = Color(0xFF1E1D1A), onSurface = Color(0xFFF2F2F2),
+        surfaceVariant = Color(0xFF2A2925), onSurfaceVariant = Color(0xFF9D998E),
+        surfaceTint = Color(0xFF1E1D1A), outline = Color(0xFF55524B), outlineVariant = Color(0xFF34322C),
+        surfaceBright = Color(0xFF2A2925), surfaceDim = Color(0xFF000000),
+        surfaceContainerLowest = Color(0xFF000000), surfaceContainerLow = Color(0xFF111110),
+        surfaceContainer = Color(0xFF161513), surfaceContainerHigh = Color(0xFF24231F),
+        surfaceContainerHighest = Color(0xFF2E2D28),
+        error = Color(0xFFFF8A7A), onError = Color(0xFF3A0E07),
     ) else lightColorScheme(
-        primary = Color(0xFF2F628C), onPrimary = Color(0xFFFFFFFF),
-        primaryContainer = Color(0xFFD3E5F5), onPrimaryContainer = Color(0xFF0B2F4C),
-        secondary = Color(0xFF52606D), onSecondary = Color(0xFFFFFFFF),
-        secondaryContainer = Color(0xFFD9E6F1), onSecondaryContainer = Color(0xFF13273A),
-        tertiary = Color(0xFF3F6E64), onTertiary = Color(0xFFFFFFFF),
-        tertiaryContainer = Color(0xFFD2EDE5), onTertiaryContainer = Color(0xFF0E2D27),
-        background = Color(0xFFF3F5F7), onBackground = Color(0xFF1B1F23),
-        surface = Color(0xFFFFFFFF), onSurface = Color(0xFF1B1F23),
-        surfaceVariant = Color(0xFFE3E8ED), onSurfaceVariant = Color(0xFF515C66),
-        surfaceTint = Color(0xFF2F628C), outline = Color(0xFF8A949D), outlineVariant = Color(0xFFCDD4DA),
-        surfaceBright = Color(0xFFFFFFFF), surfaceDim = Color(0xFFE6EAEE),
-        surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFF7F9FA),
-        surfaceContainer = Color(0xFFEEF2F5), surfaceContainerHigh = Color(0xFFE8ECF0),
-        surfaceContainerHighest = Color(0xFFE2E7EB),
-        error = Color(0xFFB4462F), onError = Color(0xFFFFFFFF),
+        primary = Color(0xFF8E2516), onPrimary = Color(0xFFFFFFFF),
+        primaryContainer = Color(0xFFF6D9D2), onPrimaryContainer = Color(0xFF5C150B),
+        secondary = Color(0xFFA1997F), onSecondary = Color(0xFFFFFFFF),
+        secondaryContainer = Color(0xFFE4E2DC), onSecondaryContainer = Color(0xFF3C3A33),
+        tertiary = Color(0xFFA1997F), onTertiary = Color(0xFFFFFFFF),
+        tertiaryContainer = Color(0xFFE9E6DC), onTertiaryContainer = Color(0xFF3C3A33),
+        background = Color(0xFFF2F1ED), onBackground = Color(0xFF1F1F1F),
+        surface = Color(0xFFFCFCFB), onSurface = Color(0xFF1F1F1F),
+        surfaceVariant = Color(0xFFE4E2DC), onSurfaceVariant = Color(0xFF8D887B),
+        surfaceTint = Color(0xFFFCFCFB), outline = Color(0xFFC8C5BC), outlineVariant = Color(0xFFDDDAD3),
+        surfaceBright = Color(0xFFFCFCFB), surfaceDim = Color(0xFFE6E5E0),
+        surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFF7F6F3),
+        surfaceContainer = Color(0xFFF2F1ED), surfaceContainerHigh = Color(0xFFE8E7E2),
+        surfaceContainerHighest = Color(0xFFDFDDD7),
+        error = Color(0xFFB3261E), onError = Color(0xFFFFFFFF),
     )
     MaterialTheme(
         colorScheme = colors,
+        shapes = androidx.compose.material3.Shapes(
+            small = RoundedCornerShape(14.dp), medium = RoundedCornerShape(22.dp), large = RoundedCornerShape(26.dp),
+        ),
         typography = Typography(
-            titleLarge = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Bold),
-            titleMedium = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.SemiBold),
+            titleLarge = TextStyle(fontSize = 26.sp, fontWeight = FontWeight.Normal),
+            titleMedium = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
             bodyLarge = TextStyle(fontSize = 17.sp),
             bodyMedium = TextStyle(fontSize = 16.sp),
             labelLarge = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium),
@@ -190,7 +196,7 @@ fun ClockIcon(minuteOfDay: Int?, size: Dp = 22.dp, color: Color = MaterialTheme.
 
 /** One circle per hour, filled as much as the duration: half a circle = half an hour. */
 @Composable
-fun DurationIcon(minutes: Int, size: Dp = 18.dp, color: Color = MaterialTheme.colorScheme.tertiary) {
+fun DurationIcon(minutes: Int, size: Dp = 18.dp, color: Color = Salmon) {
     val full = (minutes / 60).coerceAtMost(4)
     val rem = minutes % 60
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -204,7 +210,7 @@ private fun Pie(fraction: Float, size: Dp, color: Color) {
     Canvas(Modifier.size(size)) {
         val r = this.size.minDimension / 2
         val sw = r * 0.18f
-        drawCircle(color.copy(alpha = 0.35f), radius = r - sw / 2, style = Stroke(sw))
+        drawCircle(color.copy(alpha = 0.4f), radius = r - sw / 2, style = Stroke(sw))
         if (fraction > 0f) {
             drawArc(
                 color, startAngle = -90f, sweepAngle = 360f * fraction.coerceIn(0f, 1f), useCenter = true,
@@ -233,12 +239,66 @@ fun TimeLine(planned: Long, minutes: Int, end: Boolean = false) {
 
 @Composable
 fun Action(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    Button(onClick = onClick, modifier = modifier.heightIn(min = 48.dp), enabled = enabled) { Text(label) }
+    Button(
+        onClick = onClick, modifier = modifier.heightIn(min = 52.dp), enabled = enabled,
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Salmon, contentColor = Color.White),
+    ) { Text(label, fontWeight = FontWeight.Bold) }
 }
 
 @Composable
 fun Secondary(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    OutlinedButton(onClick = onClick, modifier = modifier.heightIn(min = 48.dp), enabled = enabled) { Text(label) }
+    Button(
+        onClick = onClick, modifier = modifier.heightIn(min = 48.dp), enabled = enabled,
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+    ) { Text(label) }
+}
+
+/** Kitchen-timer style: the coloured part is the time left. */
+@Composable
+fun AnalogTimer(spentMs: Long, totalMs: Long, size: Dp = 230.dp) {
+    val left = (1f - spentMs.toFloat() / totalMs.coerceAtLeast(1)).coerceIn(0f, 1f)
+    val face = MaterialTheme.colorScheme.surfaceVariant
+    val tick = MaterialTheme.colorScheme.onSurfaceVariant
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(size)) {
+            val r = this.size.minDimension / 2
+            drawCircle(face, radius = r)
+            if (left > 0f) drawArc(Salmon, startAngle = -90f, sweepAngle = 360f * left, useCenter = true, topLeft = Offset(r * 0.08f, r * 0.08f), size = Size(this.size.width - r * 0.16f, this.size.height - r * 0.16f))
+            for (i in 0 until 12) {
+                val a = Math.toRadians(i * 30.0 - 90)
+                val o = Offset(center.x + (r * 0.98f * cos(a)).toFloat(), center.y + (r * 0.98f * sin(a)).toFloat())
+                val n = Offset(center.x + (r * 0.86f * cos(a)).toFloat(), center.y + (r * 0.86f * sin(a)).toFloat())
+                drawLine(tick, n, o, r * 0.025f, StrokeCap.Round)
+            }
+            val ha = Math.toRadians(360.0 * (1 - left) - 90)
+            drawLine(tick, center, Offset(center.x + (r * 0.7f * cos(ha)).toFloat(), center.y + (r * 0.7f * sin(ha)).toFloat()), r * 0.035f, StrokeCap.Round)
+            drawCircle(tick, radius = r * 0.05f)
+        }
+    }
+}
+
+/** Bottom tabs like the clock app: words, the open one underlined. */
+@Composable
+fun TextTabs(labels: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).padding(top = 6.dp, bottom = 10.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        labels.forEachIndexed { i, label ->
+            val on = i == selected
+            Column(
+                Modifier.clickable { onSelect(i) }.padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(label, fontSize = 19.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                    color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
+                Box(Modifier.padding(top = 3.dp).width(if (on) 44.dp else 0.dp).heightIn(min = 3.dp, max = 3.dp)
+                    .background(if (on) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(2.dp)))
+            }
+        }
+    }
 }
 
 @Composable

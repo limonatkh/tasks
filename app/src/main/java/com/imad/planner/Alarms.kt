@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 
 /** Ringing alarms at task boundaries, rest/set alarms during training, and the day roll-over. */
 object Alarms {
-    const val ALARM_CHANNEL = "planner_alarm_v1"
+    private const val ALARM_PREFIX = "planner_alarm_"
     const val TIMER_CHANNEL = "planner_timer_v1"
     private const val BASE_CODE = 5000
     private const val MAX_EVENTS = 80
@@ -31,13 +31,30 @@ object Alarms {
 
     data class Event(val at: Long, val title: String, val text: String, val taskId: String?, val canStart: Boolean, val silent: Boolean = false)
 
+    /** The task sound the user picked; by default a short notification tone, not the wake-up alarm. */
+    fun soundUri(context: Context): android.net.Uri? {
+        val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("sound", null)
+        return saved?.let(android.net.Uri::parse) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+    }
+
+    fun setSound(context: Context, uri: android.net.Uri?) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("sound", uri?.toString()).apply()
+        channels(context)
+    }
+
+    /** Channel sounds cannot change, so each sound gets its own channel and old ones are removed. */
+    private fun alarmChannel(context: Context): String = ALARM_PREFIX + (soundUri(context)?.toString() ?: "none").hashCode().toUInt().toString(16)
+
     fun channels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
-        val alarm = NotificationChannel(ALARM_CHANNEL, "تنبيهات المهام", NotificationManager.IMPORTANCE_HIGH).apply {
+        val id = alarmChannel(context)
+        nm.notificationChannels.filter { (it.id.startsWith(ALARM_PREFIX) || it.id == "planner_alarm_v1") && it.id != id }
+            .forEach { nm.deleteNotificationChannel(it.id) }
+        val alarm = NotificationChannel(id, "تنبيهات المهام", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "ترن عند انتهاء مهمة وبدء التالية"
             setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
+                soundUri(context),
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
             )
             enableVibration(true)
@@ -156,7 +173,7 @@ object Alarms {
 
     fun ring(context: Context, id: Int, title: String, text: String, taskId: String?, canStart: Boolean, insistent: Boolean) {
         channels(context)
-        val b = NotificationCompat.Builder(context, ALARM_CHANNEL)
+        val b = NotificationCompat.Builder(context, alarmChannel(context))
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)
             .setContentText(text)

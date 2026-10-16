@@ -18,6 +18,8 @@ object Plans {
                     pointer = o.optInt("pointer", 1), startPage = o.optInt("startPage", 1),
                     accepted = o.optBoolean("accepted"), configured = o.optBoolean("configured"),
                     dayKey = o.optString("dayKey"), dayDone = o.optInt("dayDone"), dayQuota = o.optInt("dayQuota"),
+                    category = o.optString("category"), stages = o.optString("stages"), perWeek = o.optDouble("perWeek", 1.0),
+                    khatmaDays = o.optInt("khatmaDays"), startDay = o.optString("startDay"), startDone = o.optInt("startDone"),
                 )
             }
         }.getOrDefault(emptyList())
@@ -32,6 +34,8 @@ object Plans {
                     .put("minutesPerUnit", p.minutesPerUnit).put("cycleDays", p.cycleDays).put("pointer", p.pointer)
                     .put("startPage", p.startPage).put("accepted", p.accepted).put("configured", p.configured)
                     .put("dayKey", p.dayKey).put("dayDone", p.dayDone).put("dayQuota", p.dayQuota)
+                    .put("category", p.category).put("stages", p.stages).put("perWeek", p.perWeek)
+                    .put("khatmaDays", p.khatmaDays).put("startDay", p.startDay).put("startDone", p.startDone)
             )
         }
         return a.toString()

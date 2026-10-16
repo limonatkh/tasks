@@ -71,6 +71,7 @@ fun planMonthDefault(p: Plan, ym: YearMonth, today: LocalDate, mem: Int): Double
     return when (p.kind) {
         "memorize", "amount" -> minOf(p.total, p.done + perDay * (ChronoUnit.DAYS.between(today, end).toInt() + 1)).toDouble()
         "read" -> (perDay * (ChronoUnit.DAYS.between(first, end).toInt() + 1)).toDouble()
+        "cycle" -> minOf(if (p.total > 0) p.total.toDouble() else Double.MAX_VALUE, Math.floor((p.done + p.perWeek * (ChronoUnit.DAYS.between(today, end) + 1) / 7.0) * 10) / 10)
         else -> null
     }
 }
@@ -79,6 +80,7 @@ fun planMonthText(p: Plan, v: Double): String = when (p.kind) {
     "memorize" -> "حتى صفحة ${num(v)}"
     "amount" -> "حتى ${num(v)} ${p.unit}"
     "read" -> "${num(v)} صفحة"
+    "cycle" -> "${num(v)} ${p.unit}"
     else -> num(v)
 }
 
@@ -107,7 +109,7 @@ fun targetsIn(cat: String, s: Snapshot): List<YearTarget> =
 
 /** Recurring tasks that are not tied to a goal or plan (boxing, reading a book…). */
 fun habitsIn(cat: String, s: Snapshot): List<Rule> =
-    s.rules.filter { it.category == cat && !it.id.startsWith("plan-") && Members.goals(it).isEmpty() }
+    s.rules.filter { Cat.ofRule(it) == cat && !it.id.startsWith("plan-") && Members.goals(it).isEmpty() }
 
 // ---------------- Plan tab ----------------
 
@@ -120,6 +122,7 @@ fun PlanTab(s: Snapshot, nav: Nav) {
                 FilterChip(selected = mode == i, onClick = { mode = i }, label = { Text(label, fontSize = 16.sp) })
             }
             Box(Modifier.weight(1f))
+            TextButton(onClick = nav.groups) { Text("المجموعات") }
             TextButton(onClick = nav.newGoal) { Text("+ هدف") }
         }
         when (mode) {
@@ -172,7 +175,7 @@ fun WeekView(s: Snapshot, nav: Nav) {
         }
         item { WeekHeader(days, s.today) }
         for (cat in Cat.keys) {
-            val inCat = rows.filter { it.category == cat }
+            val inCat = rows.filter { Cat.known(it.category) == cat }
             if (inCat.isEmpty()) continue
             val expanded = open[cat] ?: true
             item(key = "h-$cat") { CategoryHeader(Cat.name(cat), inCat.size, expanded) { open[cat] = !expanded } }
@@ -359,11 +362,10 @@ fun YearView(s: Snapshot, nav: Nav) {
         for (cat in Cat.keys) {
             val targets = targetsIn(cat, s)
             val habits = habitsIn(cat, s)
-            val projects = if (cat == "work") s.projects else emptyList()
-            val count = targets.size + habits.size + projects.size
+            val count = targets.size + habits.size
             if (count == 0) continue
             val pending = targets.sumOf { unreviewed(it, s) }
-            val expanded = open[cat] ?: false
+            val expanded = open[cat] ?: true
             item(key = "yh-$cat") { CategoryHeader(Cat.name(cat), count, expanded, extra = if (pending > 0) "$pending مقترح" else null) { open[cat] = !expanded } }
             if (!expanded) continue
             if (cat == "sport" && inactiveSport.isNotEmpty()) item(key = "ys-on") {
@@ -378,18 +380,6 @@ fun YearView(s: Snapshot, nav: Nav) {
                 Panel(Modifier.clickable { nav.openRule(r) }) {
                     Text(r.title, style = MaterialTheme.typography.titleMedium)
                     Muted(ruleSummary(r))
-                }
-            }
-            for (p in projects) item(key = "yp-${p.id}") {
-                val stages = runCatching { JSONArray(p.stages).let { a -> (0 until a.length()).map { a.getString(it) } } }.getOrDefault(emptyList())
-                Panel {
-                    Text(p.name, style = MaterialTheme.typography.titleMedium)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        stages.forEach { st ->
-                            Secondary(st, { nav.newTask(Task(title = "${p.name}: $st", minutes = 60, day = s.today.toString(), projectId = p.id, category = "work")) })
-                        }
-                    }
-                    Muted("اضغط مرحلة لإضافتها كمهمة.")
                 }
             }
         }
@@ -416,7 +406,11 @@ private fun YearTargetCard(y: YearTarget, s: Snapshot, nav: Nav) {
                 Text("${p.done} / ${p.total} ${p.unit}", style = MaterialTheme.typography.bodyLarge)
                 LinearProgressIndicator(progress = { (p.done.toFloat() / p.total.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                 PlanMath.suggestion(p, s.today).projectedEnd?.let { Muted("الانتهاء المتوقع: $it") }
-            } else Muted(if (p.kind == "read") "${PlanMath.quota(p, s.today, s.memLast)} صفحة يومياً" else "${PlanMath.quota(p, s.today, s.memLast)} صفحة سماع يومياً")
+            } else if (p.kind == "cycle") {
+                Text("${p.done} / ${p.total} ${p.unit}", style = MaterialTheme.typography.bodyLarge)
+                LinearProgressIndicator(progress = { (p.done.toFloat() / p.total.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                Muted("المرحلة الجاية: ${PlanMath.phaseTitle(p, 0, 1, 0).substringAfter(": ")} · ${num(p.perWeek)} دورة بالأسبوع")
+            } else Muted(if (p.kind == "read") "${PlanMath.quota(p, s.today, s.memLast)} صفحة يومياً" + if (p.done > 0) " · ختمت ${p.done} مرة" else "" else "${PlanMath.quota(p, s.today, s.memLast)} صفحة سماع يومياً")
             if (!p.accepted) Text("الخطة متوقفة", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         }
     }
@@ -424,7 +418,7 @@ private fun YearTargetCard(y: YearTarget, s: Snapshot, nav: Nav) {
 
 /** A goal's yearly plan as months, each a suggested default until reviewed. */
 @Composable
-fun YearGoalSheet(y: YearTarget, s: Snapshot, nav: Nav, close: () -> Unit, acceptAll: (String, List<String>) -> Unit, acceptTraining: (List<String>) -> Unit) {
+fun YearGoalSheet(y: YearTarget, s: Snapshot, nav: Nav, close: () -> Unit, acceptAll: (String, List<String>) -> Unit, acceptTraining: (List<String>) -> Unit, move: (String) -> Unit) {
     val g = y.goal?.let { gg -> s.goals.firstOrNull { it.id == gg.id } ?: gg }
     val p = y.plan?.let { pp -> s.plans.firstOrNull { it.id == pp.id } ?: pp }
     val target = YearTarget(g, p)
@@ -463,6 +457,13 @@ fun YearGoalSheet(y: YearTarget, s: Snapshot, nav: Nav, close: () -> Unit, accep
             val pendingMonths = months.filter { s.months[Months.key(target.key, it.toString())]?.reviewed != true }.map { it.toString() }
             if (pendingMonths.isNotEmpty()) Action("قبول كل المقترحات · ${pendingMonths.size}", { acceptAll(target.key, pendingMonths) }, Modifier.fillMaxWidth())
         }
+        Text("المجموعة", style = MaterialTheme.typography.labelLarge)
+        val current = if (g != null) Cat.ofGoal(g) else Cat.ofPlan(p!!)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Cat.keys.forEach { k -> FilterChip(selected = current == k, onClick = { if (k != current) move(k) }, label = { Text(Cat.name(k)) }) }
+        }
+        val series = if (g != null) s.rules.firstOrNull { g.id in Members.goals(it) }?.id else "plan-${p!!.id}"
+        if (series != null) Secondary("تقرير الإنجاز", { nav.report(series, g?.name ?: p!!.title) }, Modifier.fillMaxWidth())
         Secondary("إعدادات الهدف", { close(); if (g != null) nav.openGoal(g) else nav.openPlan(p!!) }, Modifier.fillMaxWidth())
     }
 }

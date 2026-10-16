@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
@@ -49,24 +50,25 @@ fun CategoryPicker(category: String, sport: Int, change: (String, Int) -> Unit) 
     }
 }
 
-/** 1, 2 or 3 parts over the day, with the share of each. */
+/** Any number of parts over the day, with the share of each. */
 @Composable
 fun PhasesEditor(phases: List<Int>, change: (List<Int>) -> Unit) {
+    fun even(n: Int): List<Int> = List(n) { i -> 100 / n + if (i < 100 % n) 1 else 0 }
     Text("تقسيمها خلال النهار", style = MaterialTheme.typography.labelLarge)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(1 to listOf(100), 2 to listOf(50, 50), 3 to listOf(34, 33, 33)).forEach { (n, def) ->
-            FilterChip(selected = phases.size == n, onClick = { if (phases.size != n) change(def) }, label = { Text(if (n == 1) "مرة وحدة" else "$n فترات") })
-        }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Secondary("−", { if (phases.size > 1) change(even(phases.size - 1)) })
+        Text(if (phases.size == 1) "مرة وحدة" else "${phases.size} فترات", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Secondary("+", { if (phases.size < 12) change(even(phases.size + 1)) })
     }
     if (phases.size > 1) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             phases.forEachIndexed { i, p ->
-                Field(p.toString(), "الفترة ${i + 1} ٪", { v ->
+                Field(p.toString(), "${i + 1} ٪", { v ->
                     val n = digits(v).toIntOrNull() ?: return@Field
                     val list = phases.toMutableList(); list[i] = n.coerceIn(1, 99)
                     if (list.size == 2) list[1 - i] = 100 - list[i]
                     change(list)
-                }, numeric = true, modifier = Modifier.weight(1f))
+                }, numeric = true, modifier = Modifier.width(92.dp))
             }
         }
         val sum = phases.sum()
@@ -97,7 +99,7 @@ fun RepeatPicker(everyHours: String, weekdays: Int, setHours: (String) -> Unit, 
 
 // ---------------- Task ----------------
 
-class TaskActions(val reopen: () -> Unit, val toToday: () -> Unit, val postpone: () -> Unit)
+class TaskActions(val reopen: () -> Unit, val toToday: () -> Unit, val postpone: () -> Unit, val report: () -> Unit = {}, val note: () -> Unit = {})
 
 @Composable
 fun TaskEditor(
@@ -114,6 +116,7 @@ fun TaskEditor(
     var interruptible by remember { mutableStateOf(t.interruptible) }
     var category by remember { mutableStateOf(t.category) }
     var sport by remember { mutableIntStateOf(t.sport) }
+    var atWork by remember { mutableStateOf(t.atWork) }
     var everyHours by remember { mutableStateOf("24") }
     var weekdays by remember { mutableIntStateOf(0) }
     var phases by remember { mutableStateOf(listOf(100)) }
@@ -152,6 +155,7 @@ fun TaskEditor(
                 listOf("منخفضة", "عادية", "عالية").forEachIndexed { i, s -> FilterChip(selected = priority == i, onClick = { priority = i }, label = { Text(s) }) }
             }
             if (category != "sport") SwitchRow("تصلح في فترات الراحة (بالتوازي)", interruptible) { interruptible = it }
+            SwitchRow("مسموح وقت الدوام", atWork) { atWork = it }
         }
         if (!isNew) {
             if (t.planned > 0 && !t.pinned) Muted("رتّبها التطبيق: ${timeLabel(t.planned)}")
@@ -170,13 +174,14 @@ fun TaskEditor(
                         preferredMinute = pinnedMinute, pinned = pinnedMinute >= 0, priority = priority,
                         interruptible = interruptible && category != "sport", kind = if (category == "sport") "training" else "task",
                         anchorDay = today.toString(), category = category, sport = if (category == "sport") sport else 0, phases = phasesText(phases),
+                        atWork = atWork,
                     )
                 )
             } else save(
                 t.copy(
                     title = title, minutes = m, day = day.toString(), priority = priority, interruptible = interruptible && category != "sport",
                     pinned = pinnedMinute >= 0, planned = if (pinnedMinute >= 0) Clock.epoch(day, pinnedMinute) else (if (t.pinned) 0 else t.planned),
-                    category = category, sport = if (category == "sport") sport else 0,
+                    category = category, sport = if (category == "sport") sport else 0, atWork = atWork,
                 ), asDefault, phases
             )
         }, Modifier.fillMaxWidth(), enabled = valid)
@@ -185,6 +190,10 @@ fun TaskEditor(
                 !t.open -> Secondary("إعادة فتح المهمة", actions.reopen, Modifier.fillMaxWidth())
                 t.day < today.toString() -> Secondary("نقل لليوم", actions.toToday, Modifier.fillMaxWidth())
                 else -> Secondary("تأجيل لليوم التالي", actions.postpone, Modifier.fillMaxWidth())
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Secondary("التقرير", actions.report, Modifier.weight(1f))
+                Secondary("ملاحظة", actions.note, Modifier.weight(1f))
             }
             Secondary("حذف المهمة", { confirmDelete = true }, Modifier.fillMaxWidth())
         }
@@ -213,6 +222,7 @@ fun RuleEditor(r: Rule, close: () -> Unit, save: (Rule) -> Unit, delete: () -> U
     var category by remember { mutableStateOf(r.category) }
     var sport by remember { mutableIntStateOf(r.sport) }
     var phases by remember { mutableStateOf(parsePhases(r.phases)) }
+    var atWork by remember { mutableStateOf(r.atWork) }
     var picking by remember { mutableStateOf(false) }
     val members = Members.parse(r.members)
     val m = digits(minutes).toIntOrNull() ?: 0
@@ -236,6 +246,7 @@ fun RuleEditor(r: Rule, close: () -> Unit, save: (Rule) -> Unit, delete: () -> U
         if (!isPlan) CategoryPicker(category, sport) { c, sp -> category = c; sport = sp }
         PhasesEditor(phases) { phases = it }
         if (category != "sport" && !isPlan) SwitchRow("تصلح في فترات الراحة (بالتوازي)", interruptible) { interruptible = it }
+        SwitchRow("مسموح وقت الدوام", atWork) { atWork = it }
         if (r.source.isNotEmpty()) Muted(r.source)
         if (category == "sport") Muted("مرور الوقت لا يضمن الاستشفاء؛ عدّل حسب إحساسك.")
         Action("حفظ", {
@@ -245,7 +256,7 @@ fun RuleEditor(r: Rule, close: () -> Unit, save: (Rule) -> Unit, delete: () -> U
                     everyHours = (digits(everyHours).toIntOrNull() ?: r.everyHours).coerceIn(1, 24 * 60),
                     weekdays = weekdays, preferredMinute = preferred, pinned = pinned && preferred >= 0, active = active,
                     interruptible = if (isPlan) r.interruptible else interruptible && category != "sport",
-                    category = category, sport = if (category == "sport") sport else 0, phases = phasesText(phases),
+                    category = category, sport = if (category == "sport") sport else 0, phases = phasesText(phases), atWork = atWork,
                     anchorDay = if (active && !r.active) Clock.today().toString() else r.anchorDay,
                 )
             )
@@ -311,6 +322,10 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
     var cycle by remember { mutableStateOf(p.cycleDays.toString()) }
     var perUnit by remember { mutableStateOf(p.minutesPerUnit.toString()) }
     var phases by remember { mutableStateOf(parsePhases(rule?.phases ?: "")) }
+    var khatma by remember { mutableStateOf(if (p.khatmaDays > 0) p.khatmaDays.toString() else "") }
+    var stages by remember { mutableStateOf(p.stageList.joinToString("، ")) }
+    var perWeek by remember { mutableStateOf(num(p.perWeek)) }
+    var group by remember { mutableStateOf(Cat.ofPlan(p)) }
     val today = s.today
 
     fun n(x: String) = digits(x).toIntOrNull()
@@ -318,11 +333,15 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
         title = title.trim(), unit = unit.trim().ifEmpty { "صفحة" },
         total = (n(total) ?: p.total).coerceIn(1, 100_000),
         done = (n(done) ?: 0).coerceIn(0, n(total) ?: p.total),
-        pointer = (n(pointer) ?: 1).coerceIn(1, MUSHAF_PAGES),
         perDay = (n(perDay) ?: 0).coerceIn(0, 1000),
         cycleDays = (n(cycle) ?: 7).coerceIn(1, 365),
         minutesPerUnit = (n(perUnit) ?: p.minutesPerUnit).coerceIn(1, 240),
         configured = true,
+        khatmaDays = (n(khatma) ?: 0).coerceIn(0, 3650),
+        stages = if (p.kind == "cycle") org.json.JSONArray(stages.split('،', ',', '\n').map { it.trim() }.filter { it.isNotEmpty() }).toString() else p.stages,
+        perWeek = digits(perWeek).toDoubleOrNull()?.coerceIn(0.1, 14.0) ?: p.perWeek,
+        category = group,
+        pointer = if (p.kind == "cycle") p.pointer else (n(pointer) ?: 1).coerceIn(1, MUSHAF_PAGES),
     )
     val mem = s.plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0
     Sheet(p.title.ifEmpty { "خطة جديدة" }, close) {
@@ -335,8 +354,19 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
             }
             "read" -> {
                 Field(pointer, "الصفحة اللي بتبدأ منها", { pointer = it }, numeric = true)
-                Field(perDay, "عدد الصفحات يومياً", { perDay = it }, numeric = true)
+                Field(khatma, "ختمة كل كم يوم", { khatma = it }, numeric = true)
+                if ((n(khatma) ?: 0) == 0) Field(perDay, "أو: عدد الصفحات يومياً", { perDay = it }, numeric = true)
                 Field(perUnit, "دقائق لكل صفحة", { perUnit = it }, numeric = true)
+                Muted("الورد بيمشي بالترتيب على صفحات المصحف الـ604. لما يوصل 604 بتبدأ ختمة جديدة من الصفحة 1." + if (p.done > 0) " ختمت ${p.done} مرة." else "")
+            }
+            "cycle" -> {
+                Field(title, "اسم المشروع", { title = it })
+                Field(stages, "المراحل بالترتيب (افصل بفاصلة)", { stages = it })
+                Field(perWeek, "كم دورة كاملة بالأسبوع", { perWeek = it }, numeric = true)
+                Field(perUnit, "دقائق كل مرحلة", { perUnit = it }, numeric = true)
+                Field(total, "هدف السنة (عدد الحلقات/الإصدارات)", { total = it }, numeric = true)
+                Field(done, "المنجز حتى الآن", { done = it }, numeric = true)
+                Muted("كل يوم بتطلع المرحلة الجاية: مثلاً يوم تحضير، يوم تسجيل، يوم مونتاج… ولما تكمل الدورة بتنحسب حلقة.")
             }
             "review" -> {
                 Text(if (mem > 0) "المحفوظ حالياً: صفحات 1–$mem" else "حدّد خطة الحفظ أولاً حتى تُعرف صفحات المراجعة.", style = MaterialTheme.typography.bodyLarge)
@@ -356,6 +386,10 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
                 Field(perUnit, "دقائق لكل وحدة", { perUnit = it }, numeric = true)
             }
         }
+        Text("المجموعة", style = MaterialTheme.typography.labelLarge)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Cat.keys.filter { it != "sport" }.forEach { k -> FilterChip(selected = group == k, onClick = { group = k }, label = { Text(Cat.name(k)) }) }
+        }
         PhasesEditor(phases) { phases = it }
         HorizontalDivider()
         val q = PlanMath.quota(candidate, today, if (p.kind == "review") mem else candidate.done)
@@ -366,10 +400,11 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
             Text("هذا الأسبوع: ${sg.week} · هذا الشهر: ${sg.month}", style = MaterialTheme.typography.bodyLarge)
             sg.projectedEnd?.let { Text("الانتهاء المتوقع: $it", style = MaterialTheme.typography.bodyLarge) }
         }
-        val valid = p.kind != "amount" || candidate.title.isNotEmpty()
+        if (p.kind == "cycle") Text("اليوم: ${PlanMath.phaseTitle(candidate, 0, q, 0)}", style = MaterialTheme.typography.bodyLarge)
+        val valid = (p.kind != "amount" && p.kind != "cycle") || (candidate.title.isNotEmpty() && (p.kind != "cycle" || candidate.stageList.isNotEmpty()))
         Action(if (p.accepted) "حفظ" else "قبول الخطة", { save(candidate.copy(accepted = true), phasesText(phases)) }, Modifier.fillMaxWidth(), enabled = valid)
         if (p.accepted) Secondary("إيقاف الخطة", { save(candidate.copy(accepted = false), phasesText(phases)) }, Modifier.fillMaxWidth())
-        if (p.kind == "amount" && p.title.isNotEmpty()) Secondary("حذف الخطة", delete, Modifier.fillMaxWidth())
+        if ((p.kind == "amount" || p.kind == "cycle") && p.title.isNotEmpty()) Secondary("حذف الخطة", delete, Modifier.fillMaxWidth())
     }
 }
 
@@ -392,14 +427,16 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
     var minutes by remember { mutableStateOf("45") }
     var total by remember { mutableStateOf("") }
     var perDay by remember { mutableStateOf("") }
+    var stagesText by remember { mutableStateOf("") }
+    var perWeekText by remember { mutableStateOf("1") }
     Sheet("هدف جديد", close) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("رقم أوصله", "كمية أخلّصها", "عادة متكررة").forEachIndexed { i, s ->
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("رقم أوصله", "كمية أخلّصها", "مشروع بمراحل", "عادة متكررة").forEachIndexed { i, s ->
                 FilterChip(selected = type == i, onClick = { type = i }, label = { Text(s) })
             }
         }
         Field(name, "اسم الهدف", { name = it })
-        if (type != 1) CategoryPicker(category, sport) { c, sp -> category = c; sport = sp }
+        if (type == 0 || type == 3) CategoryPicker(category, sport) { c, sp -> category = c; sport = sp }
         val months12 = (digits(months).toIntOrNull() ?: 12).coerceIn(1, 60)
         when (type) {
             0 -> {
@@ -439,8 +476,24 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
                 Action("حفظ الهدف", {
                     savePlan(Plan(id = UUID.randomUUID().toString(), title = name.trim(), kind = "amount", unit = unit.trim().ifEmpty { "صفحة" },
                         total = tt!!, perDay = (digits(perDay).toIntOrNull() ?: 0), minutesPerUnit = 2,
-                        endDay = today.plusMonths(months12.toLong()).toString(), accepted = true, configured = true))
+                        endDay = today.plusMonths(months12.toLong()).toString(), accepted = true, configured = true, category = "reading"))
                 }, Modifier.fillMaxWidth(), enabled = name.isNotBlank() && tt != null && tt > 0)
+            }
+            2 -> {
+                Field(stagesText, "المراحل بالترتيب (افصل بفاصلة)", { stagesText = it })
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Field(perWeekText, "دورات بالأسبوع", { perWeekText = it }, numeric = true, modifier = Modifier.weight(1f))
+                    Field(minutes, "دقائق المرحلة", { minutes = it }, numeric = true, modifier = Modifier.weight(1f))
+                }
+                Field(total, "هدف السنة (عدد الحلقات)", { total = it }, numeric = true)
+                val st = stagesText.split('،', ',').map { it.trim() }.filter { it.isNotEmpty() }
+                Action("حفظ المشروع", {
+                    savePlan(Plan(id = UUID.randomUUID().toString(), title = name.trim(), kind = "cycle", unit = "حلقة",
+                        total = digits(total).toIntOrNull() ?: 52, pointer = 0, stages = org.json.JSONArray(st).toString(),
+                        perWeek = digits(perWeekText).toDoubleOrNull()?.coerceIn(0.1, 14.0) ?: 1.0,
+                        minutesPerUnit = (digits(minutes).toIntOrNull() ?: 60).coerceIn(5, 600), category = "work",
+                        endDay = today.plusMonths(months12.toLong()).toString(), accepted = true, configured = true))
+                }, Modifier.fillMaxWidth(), enabled = name.isNotBlank() && st.isNotEmpty())
             }
             else -> {
                 Field(minutes, "المدة بالدقائق", { minutes = it }, numeric = true)
@@ -459,8 +512,14 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
 // ---------------- Settings ----------------
 
 @Composable
-fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit, test: () -> Unit) {
+fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit, openGroups: () -> Unit, test: () -> Unit) {
     val context = LocalContext.current
+    var soundName by remember { mutableStateOf(soundTitle(context)) }
+    val soundPicker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { res ->
+        @Suppress("DEPRECATION")
+        val uri = res.data?.getParcelableExtra<Uri>(android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        if (res.resultCode == android.app.Activity.RESULT_OK) { Alarms.setSound(context, uri); soundName = soundTitle(context) }
+    }
     var pick by remember { mutableStateOf<String?>(null) }
     var gap by remember { mutableStateOf(s.gap.toString()) }
     var extend by remember { mutableStateOf(s.extend.toString()) }
@@ -479,8 +538,28 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         timeRow("الصحوة", "dayStart", s.dayStart)
         timeRow("النوم", "dayEnd", s.dayEnd)
         Field(morning, "ساعات الصباح للقرآن والقراءة", { morning = it; digits(it).toDoubleOrNull()?.let { v -> if (v in 0.5..8.0) set("morning", (v * 60).toInt().toString()) } }, numeric = true)
-        timeRow("نهاية وقت الشغل", "workEnd", s.workEnd)
-        timeRow("آخر وقت للتمارين الثقيلة", "sportEnd", s.sportEnd)
+        timeRow("نهاية وقت الشغل والمشاريع", "workEnd", s.workEnd)
+        timeRow("التمارين الثقيلة بتكون خالصة قبل", "sportEnd", s.sportEnd)
+        Secondary("المجموعات وأوقاتها", openGroups, Modifier.fillMaxWidth())
+        HorizontalDivider()
+        Text("الدوام", style = MaterialTheme.typography.titleMedium)
+        SwitchRow("عندي دوام بالنهار", s.jobOn) { set("jobOn", if (it) "1" else "0") }
+        if (s.jobOn) {
+            timeRow("بداية الدوام", "jobStart", s.jobStart)
+            timeRow("نهاية الدوام", "jobEnd", s.jobEnd)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                weekdayNames.forEachIndexed { i, name ->
+                    FilterChip(selected = s.jobDays and (1 shl i) != 0, onClick = { set("jobDays", (s.jobDays xor (1 shl i)).toString()) }, label = { Text(name) })
+                }
+            }
+            Muted("ما بينحط شي وقت الدوام إلا المهام أو المجموعات اللي عليها «مسموح وقت الدوام».")
+        }
+        HorizontalDivider()
+        Text("مؤقت المهمة", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = s.timerStyle != "analog", onClick = { set("timerStyle", "digital") }, label = { Text("رقمي") })
+            FilterChip(selected = s.timerStyle == "analog", onClick = { set("timerStyle", "analog") }, label = { Text("عقارب") })
+        }
         Field(maxSports, "أقصى عدد تمارين باليوم", { maxSports = it; digits(it).toIntOrNull()?.let { v -> if (v in 1..6) set("maxSports", v.toString()) } }, numeric = true)
         Field(sportGap, "ساعات بين تمرين وتمرين", { sportGap = it; digits(it).toIntOrNull()?.let { v -> if (v in 0..8) set("sportGap", (v * 60).toString()) } }, numeric = true)
         Field(gap, "فاصل بين المهام (دقائق)", { gap = it; digits(it).toIntOrNull()?.let { v -> if (v in 0..120) set("gap", v.toString()) } }, numeric = true)
@@ -488,6 +567,17 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         HorizontalDivider()
         SwitchRow("المنبه عند انتهاء وبدء المهام", s.alarms) { set("alarms", if (it) "1" else "0") }
         SwitchRow("يرن حتى أوقفه", s.insistent) { set("insistent", if (it) "1" else "0") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("صوت تنبيه المهام: $soundName", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            TextButton(onClick = {
+                soundPicker.launch(Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER)
+                    .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE, android.media.RingtoneManager.TYPE_NOTIFICATION or android.media.RingtoneManager.TYPE_ALARM)
+                    .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, "صوت تنبيه المهام")
+                    .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                    .putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Alarms.soundUri(context)))
+            }) { Text("اختيار") }
+        }
+        Muted("منفصل عن منبه التصحاية؛ الافتراضي صوت إشعار قصير.")
         Secondary("تجربة المنبه", test, Modifier.fillMaxWidth())
         if (!Alarms.canExact(context)) {
             Text("المنبه الدقيق غير مسموح، قد يتأخر الرنين.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
@@ -501,10 +591,10 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.4.0")
+        Muted("الإصدار 0.5.0")
     }
     pick?.let { key ->
-        val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; else -> s.sportEnd }
+        val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }
         TimeDialog(initial, { pick = null }) { v ->
             val ok = when (key) {
                 "dayStart" -> v < s.dayEnd
@@ -533,3 +623,6 @@ fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, moveAll: ()
         }
     }
 }
+
+fun soundTitle(context: android.content.Context): String =
+    Alarms.soundUri(context)?.let { runCatching { android.media.RingtoneManager.getRingtone(context, it)?.getTitle(context) }.getOrNull() } ?: "صامت"

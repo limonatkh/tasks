@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
 data class Snapshot(
     val tasks: List<Task>, val goals: List<Goal>, val projects: List<Project>, val rules: List<Rule>,
     val logs: List<GoalLog>, val plans: List<Plan>, val months: Map<String, MonthEntry>, val settings: Settings,
-    val audioTree: Uri?, val today: LocalDate, val now: Long,
+    val audioTree: Uri?, val today: LocalDate, val now: Long, val events: List<Event> = emptyList(),
 ) {
     val memLast get() = plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0
 }
@@ -125,6 +125,11 @@ class Nav(
     val editMonth: (MonthTarget) -> Unit,
     val openYear: (YearTarget) -> Unit,
     val acceptGoals: (List<String>) -> Unit,
+    val report: (String, String) -> Unit,
+    val note: (Task) -> Unit,
+    val postpone: (Task) -> Unit,
+    val groups: () -> Unit,
+    val taskMenu: (Task) -> Unit,
 )
 
 @Composable
@@ -138,11 +143,12 @@ fun Planner(repo: Repository) {
     val rules by repo.store.rules().collectAsState(initial = emptyList())
     val logs by repo.store.logs().collectAsState(initial = emptyList())
     val metas by repo.store.metas().collectAsState(initial = emptyList())
+    val events by repo.store.events().collectAsState(initial = emptyList())
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val metaMap = metas.associate { it.key to it.value }
     val snap = Snapshot(
         tasks, goals, projects, rules, logs, Plans.parse(metaMap["plans"]), Months.parse(metaMap["months"]),
-        Settings.from(metaMap), metaMap["quranAudio"]?.let(Uri::parse), Clock.today(), now,
+        Settings.from(metaMap), metaMap["quranAudio"]?.let(Uri::parse), Clock.today(), now, events,
     )
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -159,6 +165,11 @@ fun Planner(repo: Repository) {
     var closeDay by remember { mutableStateOf(false) }
     var restoreText by remember { mutableStateOf<String?>(null) }
     var addMenu by remember { mutableStateOf(false) }
+    var reportFor by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var noteFor by remember { mutableStateOf<Task?>(null) }
+    var postponeFor by remember { mutableStateOf<Task?>(null) }
+    var groupsOpen by remember { mutableStateOf(false) }
+    var menuFor by remember { mutableStateOf<Task?>(null) }
 
     val act: (suspend () -> Unit) -> Unit = { block ->
         scope.launch {
@@ -232,6 +243,9 @@ fun Planner(repo: Repository) {
         openGoal = { goalEditor = it }, openPlan = { planEditor = it }, newGoal = { newGoal = true }, play = play,
         editMonth = { monthEdit = it }, openYear = { yearTarget = it },
         acceptGoals = { ids -> act { repo.acceptGoals(ids) } },
+        report = { series, title -> reportFor = series to title },
+        note = { noteFor = it }, postpone = { postponeFor = it }, groups = { groupsOpen = true },
+        taskMenu = { menuFor = it },
     )
 
     val today = snap.today
@@ -245,7 +259,7 @@ fun Planner(repo: Repository) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 title = {
                     Column {
-                        Text(listOf("مهام اليوم", "خطة بكرا", "الخطة", "التقارير")[tab], style = MaterialTheme.typography.titleLarge)
+                        Text(listOf("مهام اليوم", "خطة بكرا", "الخطة", "التقارير")[tab], style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
                         Text(dayLabel(if (tab == 1) today.plusDays(1) else today), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
@@ -262,25 +276,7 @@ fun Planner(repo: Repository) {
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-                listOf(
-                    "اليوم" to Icons.Filled.Today, "بكرا" to Icons.Filled.DateRange,
-                    "الخطة" to Icons.Filled.Flag, "التقارير" to Icons.Filled.BarChart,
-                ).forEachIndexed { i, (label, icon) ->
-                    NavigationBarItem(
-                        selected = tab == i, onClick = { tab = i },
-                        icon = { Icon(icon, contentDescription = null) },
-                        label = { Text(label, fontWeight = if (tab == i) FontWeight.Bold else FontWeight.Normal) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
-                            indicatorColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
-                }
-            }
+            TextTabs(listOf("اليوم", "بكرا", "الخطة", "التقارير"), tab) { tab = it }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -288,12 +284,12 @@ fun Planner(repo: Repository) {
                 0 -> TodayTab(snap, repo, nav, showList = { daySheet = true }, add = { creating = emptyTask(today) })
                 1 -> TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) })
                 2 -> PlanTab(snap, nav)
-                else -> ReportsTab(snap, backup = { exporter.launch("planner-backup-$today.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) })
+                else -> ReportsTab(snap, nav, backup = { exporter.launch("planner-backup-$today.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) })
             }
         }
     }
 
-    if (daySheet) DaySheet(snap, nav, close = { daySheet = false }, add = { creating = emptyTask(today) }, closeDay = { daySheet = false; closeDay = true })
+    if (daySheet) DaySheet(snap, repo, nav, close = { daySheet = false }, add = { creating = emptyTask(today) }, closeDay = { daySheet = false; closeDay = true })
     editor?.let { t ->
         val fresh = tasks.firstOrNull { it.id == t.id } ?: t
         TaskEditor(fresh, isNew = false, rule = fresh.ruleId?.let { id -> rules.firstOrNull { it.id == id } }, now = now,
@@ -304,7 +300,9 @@ fun Planner(repo: Repository) {
             actions = TaskActions(
                 reopen = { act { repo.reopen(t.id); editor = null } },
                 toToday = { act { repo.bringToToday(t.id); editor = null } },
-                postpone = { act { repo.postpone(t.id); editor = null } },
+                postpone = { editor = null; postponeFor = fresh },
+                report = { reportFor = seriesOf(fresh) to fresh.baseTitle },
+                note = { noteFor = fresh },
             ))
     }
     creating?.let { t ->
@@ -344,9 +342,21 @@ fun Planner(repo: Repository) {
     yearTarget?.let { y ->
         YearGoalSheet(y, snap, nav, close = { yearTarget = null },
             acceptAll = { key, yms -> act { repo.acceptMonths(key, yms) } },
-            acceptTraining = { ids -> act { repo.acceptGoals(ids) } })
+            acceptTraining = { ids -> act { repo.acceptGoals(ids) } },
+            move = { key -> act { repo.moveToGroup(y.goal?.id, y.plan?.id, null, key) } })
     }
-    if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } },
+    reportFor?.let { (series, title) -> ReportSheet(series, title, snap, close = { reportFor = null }, note = { text -> act { repo.store.task(series)?.let { repo.addNote(it.id, text) } ?: snap.tasks.lastOrNull { seriesOf(it) == series }?.let { repo.addNote(it.id, text) } } }) }
+    noteFor?.let { t -> TextDialog("ملاحظة على «${t.baseTitle}»", "ليش تأخرت أو ما خلصتها؟", close = { noteFor = null }) { text -> act { repo.addNote(t.id, text); noteFor = null } } }
+    postponeFor?.let { t -> TextDialog("تأجيل «${t.baseTitle}» لليوم التالي", "السبب (اختياري)", allowEmpty = true, close = { postponeFor = null }) { text -> act { repo.postpone(t.id, text); postponeFor = null } } }
+    if (groupsOpen) GroupsSheet(snap, close = { groupsOpen = false }, save = { list -> act { repo.saveGroups(list) } })
+    menuFor?.let { t ->
+        TaskMenu(t, close = { menuFor = null },
+            startNow = { act { repo.startNow(t.id); menuFor = null; daySheet = false } },
+            details = { menuFor = null; editor = t },
+            report = { menuFor = null; reportFor = seriesOf(t) to t.baseTitle },
+            note = { menuFor = null; noteFor = t })
+    }
+    if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false, snap.settings.insistent) })
     if (closeDay) CloseDayDialog(snap.tasks.filter { it.day == today.toString() && it.state != "skipped" }, now, close = { closeDay = false },
         moveAll = { act { val n = repo.closeDay(); closeDay = false; snackbar.showSnackbar("نُقلت $n مهام للغد") } })
@@ -409,12 +419,17 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
         if (t.pinned) Muted("موعد ثابت")
         if (members.isNotEmpty() && !t.running && t.spent == 0L) Muted(members.joinToString(" · ") { "${it.name} ${it.sets}×" })
         if (!upcoming) {
-            Text(
-                if (timeUp) "انتهى الوقت" else timerLabel(remaining),
-                fontSize = 44.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-                color = if (timeUp) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-            )
-            LinearProgressIndicator(progress = { (spent.toFloat() / (t.minutes * 60_000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+            if (s.settings.timerStyle == "analog" && !timeUp) {
+                AnalogTimer(spent, t.minutes * 60_000L)
+                Text(durLabel(((remaining + 59_999) / 60_000).toInt()) + " باقي", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.titleMedium)
+            } else {
+                Text(
+                    if (timeUp) "انتهى الوقت" else timerLabel(remaining),
+                    fontSize = 52.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                    color = if (timeUp) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+                LinearProgressIndicator(progress = { (spent.toFloat() / (t.minutes * 60_000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth(), color = Salmon)
+            }
         }
         if (t.sets > 1 && t.restSec > 0 && (t.running || t.spent > 0)) Text(trainingPhase(t, spent, members), style = MaterialTheme.typography.bodyLarge)
         if (isReview) ReviewControls(t, s, nav)
@@ -441,7 +456,11 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
             else Secondary(if (isMemorize) "حفظتها ✓" else "إنهاء", { nav.act { repo.finish(t.id) } }, Modifier.weight(1f))
             Secondary("تمديد ${s.settings.extend} د", { nav.act { repo.extend(t.id, s.settings.extend) } }, Modifier.weight(1f))
         }
-        Secondary("تأجيل للغد", { nav.act { repo.postpone(t.id) } }, Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Secondary("تأجيل", { nav.postpone(t) }, Modifier.weight(1f))
+            Secondary("ملاحظة", { nav.note(t) }, Modifier.weight(1f))
+            Secondary("التقرير", { nav.report(seriesOf(t), t.baseTitle) }, Modifier.weight(1f))
+        }
     }
 }
 
@@ -531,7 +550,7 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, onClick:
 }
 
 @Composable
-fun DaySheet(s: Snapshot, nav: Nav, close: () -> Unit, add: () -> Unit, closeDay: () -> Unit) {
+fun DaySheet(s: Snapshot, repo: Repository, nav: Nav, close: () -> Unit, add: () -> Unit, closeDay: () -> Unit) {
     val todays = todayTasks(s)
     val ts = s.today.toString()
     val rolled = s.tasks.filter { it.day == ts && it.state == "skipped" && it.note == "رُحّلت لليوم التالي" }
@@ -540,7 +559,12 @@ fun DaySheet(s: Snapshot, nav: Nav, close: () -> Unit, add: () -> Unit, closeDay
     Sheet("مهام اليوم", close) {
         Muted("${todays.size} مهام · ${todays.count { it.done }} منجزة · ${durLabel(todays.filter { it.open }.sumOf { (Maths.remaining(it, s.now) / 60_000).toInt() })} متبقية")
         if (todays.isEmpty()) Text("لا توجد مهام لهذا اليوم.", style = MaterialTheme.typography.bodyLarge)
-        todays.forEach { t -> TaskRow(t, todays, s.now) { nav.openTask(t) } }
+        Muted("اضغط مهمة أو اسحبها لتبدأ فيها الآن.")
+        todays.forEach { t ->
+            if (t.open && !t.running) SwipeToStart(t.id, start = { nav.act { repo.startNow(t.id) }; close() }) {
+                TaskRow(t, todays, s.now) { nav.taskMenu(t) }
+            } else TaskRow(t, todays, s.now) { nav.taskMenu(t) }
+        }
         if (rolled.isNotEmpty()) Muted("رُحّلت لبكرا لأنها ما وسعت اليوم: " + rolled.joinToString("، ") { it.baseTitle })
         if (late.isNotEmpty()) {
             Secondary(if (showLate) "إخفاء المهام المتأخرة" else "المهام المتأخرة · ${late.size}", { showLate = !showLate }, Modifier.fillMaxWidth())
@@ -588,7 +612,7 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
 // ---------------- Reports ----------------
 
 @Composable
-fun ReportsTab(s: Snapshot, backup: () -> Unit, restore: () -> Unit) {
+fun ReportsTab(s: Snapshot, nav: Nav, backup: () -> Unit, restore: () -> Unit) {
     val ts = s.today.toString()
     val todayList = s.tasks.filter { it.day == ts && it.state != "skipped" }
     val week = (0 until 7).map { s.today.minusDays(it.toLong()).toString() }.toSet()
@@ -610,6 +634,7 @@ fun ReportsTab(s: Snapshot, backup: () -> Unit, restore: () -> Unit) {
                 Text("المهام المتأخرة: ${s.tasks.count { it.open && it.day < ts }}", style = MaterialTheme.typography.bodyLarge)
             }
         }
+        progressReport(s, nav)
         item {
             Panel {
                 Text("البيانات", style = MaterialTheme.typography.titleMedium)

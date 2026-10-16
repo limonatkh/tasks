@@ -36,7 +36,22 @@ data class Plan(
     val dayKey: String = "",
     val dayDone: Int = 0,
     val dayQuota: Int = 0,
-)
+    /** Group key; empty = the default for its kind. */
+    val category: String = "",
+    /** cycle: the steps of one round (podcast: research, record, edit…), JSON array of names. */
+    val stages: String = "",
+    /** cycle: rounds per week (one episode a week = 1). */
+    val perWeek: Double = 1.0,
+    /** read: finish the mushaf every this many days (0 = use perDay). */
+    val khatmaDays: Int = 0,
+    /** When the plan started and where it stood then (for ahead / behind). */
+    val startDay: String = "",
+    val startDone: Int = 0,
+) {
+    val stageList: List<String> get() = runCatching {
+        val a = org.json.JSONArray(stages); (0 until a.length()).map { a.getString(it) }
+    }.getOrDefault(emptyList())
+}
 
 data class PageRange(val from: Int, val to: Int) {
     val count get() = to - from + 1
@@ -47,7 +62,15 @@ data class Suggestion(val perDay: Int, val week: Int, val month: Int, val projec
 object PlanMath {
     fun remaining(p: Plan): Int = when (p.kind) {
         "memorize", "amount" -> (p.total - p.done).coerceAtLeast(0)
+        "cycle" -> if (p.total > 0) (p.total - p.done).coerceAtLeast(0) else Int.MAX_VALUE
         else -> Int.MAX_VALUE
+    }
+
+    /** read: daily pages, from the khatma length when it is set. */
+    fun readPerDay(p: Plan): Int = when {
+        p.khatmaDays > 0 -> ceil(p.total / p.khatmaDays.toDouble()).toInt().coerceAtLeast(1)
+        p.perDay > 0 -> p.perDay
+        else -> 10
     }
 
     /** Smallest daily amount that finishes the plan by its end date. */
@@ -142,7 +165,9 @@ object PlanMath {
         if (!p.configured) return 0
         return when (p.kind) {
             "memorize", "amount" -> minOf(remaining(p), if (p.perDay > 0) p.perDay else suggestedPerDay(p, day))
-            "read" -> if (p.perDay > 0) p.perDay else 10
+            // A day's wird never crosses page 604: the next khatma starts fresh the day after.
+            "read" -> minOf(readPerDay(p), p.total - p.pointer.coerceIn(1, p.total) + 1)
+            "cycle" -> if (p.stageList.isEmpty() || remaining(p) <= 0) 0 else maxOf(1, ceil(p.perWeek * p.stageList.size / 7.0).toInt())
             "review" -> {
                 val mem = memorized(p, memLast)
                 when {
@@ -158,7 +183,15 @@ object PlanMath {
     /** Plan after [n] units are done. */
     fun applyUnits(p: Plan, n: Int, memLast: Int): Plan = when (p.kind) {
         "memorize", "amount" -> p.copy(done = minOf(p.total, p.done + n))
-        "read" -> p.copy(pointer = wrap(p.pointer + n, p.total))
+        "read" -> {
+            val next = p.pointer + n
+            if (next > p.total) p.copy(pointer = 1, done = p.done + 1) else p.copy(pointer = next)
+        }
+        "cycle" -> {
+            val size = p.stageList.size.coerceAtLeast(1)
+            val idx = p.pointer.coerceAtLeast(0) + n
+            p.copy(pointer = idx % size, done = p.done + idx / size)
+        }
         "review" -> {
             val mem = memorized(p, memLast)
             if (mem <= 0) p else {
@@ -186,7 +219,15 @@ object PlanMath {
             val b = minOf(p.total, a + count - 1)
             if (count <= 1) "حفظ: صفحة $a" else "حفظ: صفحات $a–$b"
         }
-        "read" -> "ورد القرآن: $count صفحات (من ص ${wrap(p.pointer + offset, p.total)})"
+        "read" -> {
+            val a = p.pointer.coerceIn(1, p.total) + offset
+            val b = minOf(p.total, a + count - 1)
+            if (a > p.total) "ورد القرآن" else "ورد القرآن: صفحات $a–$b"
+        }
+        "cycle" -> {
+            val st = p.stageList
+            if (st.isEmpty()) p.title else (0 until count.coerceAtLeast(1)).joinToString(" + ") { st[(p.pointer.coerceAtLeast(0) + offset + it) % st.size] }.let { "${p.title}: $it" }
+        }
         "review" -> {
             val pg = reviewPages(p, offset, count, memLast)
             when {
@@ -199,6 +240,43 @@ object PlanMath {
             val a = p.done + 1 + offset
             "${p.title}: ${p.unit} $a–${a + count - 1}"
         }
+    }
+
+    /** The day's amount when the user set this month's target: what is left, spread over the days left. */
+    fun quotaWithMonth(p: Plan, day: LocalDate, memLast: Int, monthTarget: Double?): Int {
+        if (monthTarget == null || !p.configured) return quota(p, day, memLast)
+        val end = day.with(TemporalAdjusters.lastDayOfMonth())
+        val daysLeft = (ChronoUnit.DAYS.between(day, end) + 1).toInt().coerceAtLeast(1)
+        return when (p.kind) {
+            "memorize", "amount" -> minOf(remaining(p), ceil((monthTarget - p.done).coerceAtLeast(0.0) / daysLeft).toInt())
+            "read" -> minOf(ceil(monthTarget / day.lengthOfMonth()).toInt().coerceAtLeast(1), p.total - p.pointer.coerceIn(1, p.total) + 1)
+            else -> quota(p, day, memLast)
+        }
+    }
+
+    /** cycle: rounds per week needed to reach this month's target. */
+    fun cyclePerWeekForMonth(p: Plan, day: LocalDate, monthTarget: Double): Double {
+        val end = day.with(TemporalAdjusters.lastDayOfMonth())
+        val weeks = ((ChronoUnit.DAYS.between(day, end) + 1) / 7.0).coerceAtLeast(1.0 / 7)
+        return ((monthTarget - p.done) / weeks).coerceIn(0.0, 14.0)
+    }
+
+    /** cycle: days between steps for its rounds per week. */
+    fun cycleIntervalDays(p: Plan): Int {
+        val perWeek = p.perWeek * p.stageList.size.coerceAtLeast(1)
+        return if (perWeek <= 0) 7 else (7.0 / perWeek).toInt().coerceIn(1, 7)
+    }
+
+    /** Where the plan should be today on a straight line from its start, and where it is. */
+    fun pace(p: Plan, today: LocalDate): Pair<Double, Double>? {
+        if (!p.configured || p.startDay.isEmpty() || p.kind !in setOf("memorize", "amount", "cycle")) return null
+        val days = ChronoUnit.DAYS.between(LocalDate.parse(p.startDay), today).toInt()
+        if (days <= 0) return null
+        val perDay = when (p.kind) {
+            "cycle" -> p.perWeek / 7.0
+            else -> (if (p.perDay > 0) p.perDay else suggestedPerDay(p, today)).toDouble()
+        }
+        return (p.startDone + perDay * days) to p.done.toDouble()
     }
 
     /** Plan state after [days] days, assuming each day's amount gets done. */

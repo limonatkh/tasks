@@ -36,6 +36,8 @@ data class Item(
     val sport: Int = 0,
     /** Not before this minute (later phases of a split task). */
     val earliest: Int? = null,
+    /** May be placed inside the work hours block. */
+    val atWork: Boolean = false,
 ) {
     val isTraining get() = sets > 1 && restSec > 0
 }
@@ -64,6 +66,8 @@ data class Config(
     val maxHeavy: Int = 2,
     /** Minimum minutes between two sport sessions. */
     val sportGap: Int = 180,
+    /** Busy blocks (work hours): only items with [Item.atWork] go inside them. */
+    val blocks: List<Pair<Int, Int>> = emptyList(),
 )
 
 /** Shape of the user's day: wake, sleep and the boundaries of its parts. */
@@ -82,12 +86,12 @@ object Windows {
     fun of(category: String, sport: Int, s: DayShape): Win {
         val morningEnd = minOf(s.wake + s.morning, s.sleep)
         return when {
-            category == "sport" && sport >= 2 -> {
+            category == "sport" && sport >= 2 || category == "evening" -> {
                 val end = minOf(s.sportEnd, s.sleep)
                 Win(minOf(maxOf(s.workEnd, s.wake), end), end, end)
             }
             category == "sport" -> Win(morningEnd, maxOf(morningEnd, s.sleep - 60), null)
-            category == "quran" || category == "reading" -> Win(s.wake, morningEnd, null)
+            category == "quran" || category == "reading" || category == "morning" -> Win(s.wake, morningEnd, null)
             category == "work" -> Win(morningEnd, maxOf(morningEnd, minOf(s.workEnd, s.sleep)), null)
             else -> Win(morningEnd, s.sleep, null)
         }
@@ -205,7 +209,9 @@ object Scheduler {
                     .thenByDescending { it.priority }
                     .thenBy { it.order }
             )
+        val blockers = cfg.blocks.mapIndexed { i, (a, b) -> Placed("__block$i", a, b) }
         for (it in flexible) {
+            val around = if (it.atWork) busy else busy + blockers
             if (it.sport > 0 && (sports() >= cfg.maxSports || (it.sport >= 2 && heavies() >= cfg.maxHeavy))) {
                 overflow += it.id
                 placed[it.id] = Placed(it.id, floor, floor + it.minutes, overflow = true)
@@ -217,10 +223,10 @@ object Scheduler {
                 if (it.sport > 0 && (sportOf[b.id] ?: 0) > 0) maxOf(cfg.gap, cfg.sportGap) else cfg.gap
             }
             var start: Int? = null
-            if (it.preferred != null) start = findSlot(busy, maxOf(lo, it.preferred), it.minutes, limit, gapFor)
+            if (it.preferred != null) start = findSlot(around, maxOf(lo, it.preferred), it.minutes, limit, gapFor)
             if (start == null && it.windowStart != null)
-                start = findSlot(busy, maxOf(lo, it.windowStart), it.minutes, minOf(limit, it.windowEnd ?: limit), gapFor)
-            if (start == null) start = findSlot(busy, lo, it.minutes, limit, gapFor)
+                start = findSlot(around, maxOf(lo, it.windowStart), it.minutes, minOf(limit, it.windowEnd ?: limit), gapFor)
+            if (start == null) start = findSlot(around, lo, it.minutes, limit, gapFor)
             if (start == null) {
                 overflow += it.id
                 placed[it.id] = Placed(it.id, lo, lo + it.minutes, overflow = true)
