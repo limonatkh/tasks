@@ -14,6 +14,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -108,7 +112,9 @@ data class Snapshot(
     val tasks: List<Task>, val goals: List<Goal>, val projects: List<Project>, val rules: List<Rule>,
     val logs: List<GoalLog>, val plans: List<Plan>, val months: Map<String, MonthEntry>, val settings: Settings,
     val audioTree: Uri?, val today: LocalDate, val now: Long, val events: List<Event> = emptyList(),
+    val closedToday: Boolean = false,
 ) {
+    val ruleMap get() = rules.associateBy { it.id }
     val memLast get() = plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0
 }
 
@@ -149,6 +155,7 @@ fun Planner(repo: Repository) {
     val snap = Snapshot(
         tasks, goals, projects, rules, logs, Plans.parse(metaMap["plans"]), Months.parse(metaMap["months"]),
         Settings.from(metaMap), metaMap["quranAudio"]?.let(Uri::parse), Clock.today(), now, events,
+        closedToday = metaMap.containsKey("closed:${Clock.today()}"),
     )
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -281,7 +288,9 @@ fun Planner(repo: Repository) {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
-                0 -> TodayTab(snap, repo, nav, showList = { daySheet = true }, add = { creating = emptyTask(today) })
+                0 -> TodayTab(snap, repo, nav, showList = { daySheet = true }, add = { creating = emptyTask(today) },
+                    closeDay = { mode -> act { val n = repo.closeDay(mode); snackbar.showSnackbar(if (mode == "carry") "ترحّلت $n مهام لبكرا" else "انسكّر اليوم") } },
+                    goTomorrow = { tab = 1 })
                 1 -> TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) })
                 2 -> PlanTab(snap, nav)
                 else -> ReportsTab(snap, nav, backup = { exporter.launch("planner-backup-$today.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) })
@@ -303,7 +312,9 @@ fun Planner(repo: Repository) {
                 postpone = { editor = null; postponeFor = fresh },
                 report = { reportFor = seriesOf(fresh) to fresh.baseTitle },
                 note = { noteFor = fresh },
-            ))
+            ),
+            routineNow = isRoutine(fresh, snap.ruleMap, snap.settings), colorNow = snap.settings.colors[seriesOf(fresh)] ?: -1,
+            saveTag = { r, c -> act { repo.setTag(seriesOf(fresh), r, c) } })
     }
     creating?.let { t ->
         TaskEditor(t, isNew = true, rule = null, now = now,
@@ -359,7 +370,7 @@ fun Planner(repo: Repository) {
     if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false, snap.settings.insistent) })
     if (closeDay) CloseDayDialog(snap.tasks.filter { it.day == today.toString() && it.state != "skipped" }, now, close = { closeDay = false },
-        moveAll = { act { val n = repo.closeDay(); closeDay = false; snackbar.showSnackbar("نُقلت $n مهام للغد") } })
+        finish = { mode -> act { val n = repo.closeDay(mode); closeDay = false; snackbar.showSnackbar(if (mode == "carry") "ترحّلت $n مهام لبكرا" else "انسكّر اليوم") } })
     restoreText?.let { text ->
         AlertDialog(
             onDismissRequest = { restoreText = null },
@@ -381,16 +392,42 @@ fun todayTasks(s: Snapshot) = s.tasks.filter { it.day == s.today.toString() && i
     .sortedWith(compareBy({ if (it.planned == 0L) Long.MAX_VALUE else it.planned }, { it.created }))
 
 @Composable
-fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, showList: () -> Unit, add: () -> Unit) {
+fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, showList: () -> Unit, add: () -> Unit, closeDay: (String) -> Unit, goTomorrow: () -> Unit) {
     val todays = todayTasks(s)
-    val current = currentTask(todays)
     val left = todays.count { it.open }
+    val minute = Clock.minuteOfDay(s.now)
+    val closed = s.closedToday
+    val beforeWake = minute < s.settings.dayStart
+    val afterSleep = minute >= s.settings.dayEnd || closed
+    val running = todays.firstOrNull { it.running }
+    val current = if (running != null || (!beforeWake && !afterSleep)) currentTask(todays) else null
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            if (current != null) CurrentPanel(current, todays, s, repo, nav)
-            else Panel {
-                Text("لا توجد مهمة الآن", style = MaterialTheme.typography.titleLarge)
-                Muted(if (todays.isEmpty()) "أضف مهمة والتطبيق يرتّب وقتها." else "خلصت مهام اليوم.")
+            when {
+                current != null -> CurrentPanel(current, todays, s, repo, nav)
+                beforeWake -> Panel {
+                    Text("وقت النوم", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                    Text("يومك بيبدأ الساعة ${fmt12(s.settings.dayStart)}", style = MaterialTheme.typography.bodyLarge)
+                    todays.filter { it.open }.minByOrNull { if (it.planned == 0L) Long.MAX_VALUE else it.planned }?.let {
+                        Muted("أول مهمة: ${it.title} · ${timeLabel(it.planned)}")
+                    }
+                }
+                afterSleep -> Panel {
+                    Text("انتهى اليوم", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                    Text("${todays.count { it.done }} منجزة من ${todays.size}", style = MaterialTheme.typography.bodyLarge)
+                    if (left > 0 && !closed) {
+                        Muted("$left مهام ما خلصت. شو بدك تعمل فيها؟")
+                        Action("ترحيل لبكرا", { closeDay("carry") }, Modifier.fillMaxWidth())
+                        Muted("بتنتقل لبكرا إجبارياً، والمهام الشبيهة بعدها بتتأخر يوم.")
+                        Secondary("إغلاق اليوم", { closeDay("close") }, Modifier.fillMaxWidth())
+                        Muted("الجدول بيضل زي ما هو، وبتنسجّل إنها ما انعملت.")
+                    }
+                    Secondary("خطة بكرا", goTomorrow, Modifier.fillMaxWidth())
+                }
+                else -> Panel {
+                    Text("لا توجد مهمة الآن", style = MaterialTheme.typography.titleLarge)
+                    Muted(if (todays.isEmpty()) "أضف مهمة والتطبيق يرتّب وقتها." else "خلصت مهام اليوم.")
+                }
             }
         }
         item { Secondary(if (left > 0) "باقي مهام اليوم · $left" else "مهام اليوم", showList, Modifier.fillMaxWidth()) }
@@ -421,14 +458,13 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
         if (!upcoming) {
             if (s.settings.timerStyle == "analog" && !timeUp) {
                 AnalogTimer(spent, t.minutes * 60_000L)
-                Text(durLabel(((remaining + 59_999) / 60_000).toInt()) + " باقي", modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.titleMedium)
             } else {
                 Text(
                     if (timeUp) "انتهى الوقت" else timerLabel(remaining),
                     fontSize = 52.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
                     color = if (timeUp) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                 )
-                LinearProgressIndicator(progress = { (spent.toFloat() / (t.minutes * 60_000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth(), color = Salmon)
+                LinearProgressIndicator(progress = { (spent.toFloat() / (t.minutes * 60_000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
             }
         }
         if (t.sets > 1 && t.restSec > 0 && (t.running || t.spent > 0)) Text(trainingPhase(t, spent, members), style = MaterialTheme.typography.bodyLarge)
@@ -516,12 +552,16 @@ fun ReviewControls(t: Task, s: Snapshot, nav: Nav) {
 
 /** One row of a task list: start clock, title, duration circles. */
 @Composable
-fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, onClick: () -> Unit) {
+fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snapshot? = null, onClick: () -> Unit) {
+    val routine = s != null && isRoutine(t, s.ruleMap, s.settings)
+    val tag = s?.let { tagColor(colorIndexOf(t, it.settings)) }
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = if (routine) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface),
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
+        if (tag != null) Box(Modifier.width(6.dp).fillMaxHeight().background(tag))
+        Row(Modifier.padding(14.dp).weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 ClockIcon(if (t.planned > 0) Clock.minuteOfDay(t.planned) else null, 30.dp)
                 Text(if (t.planned > 0) fmt12(Clock.minuteOfDay(t.planned)) else "—", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -535,8 +575,10 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, onClick:
                 }
                 val parent = t.parallelTo?.let { id -> all.firstOrNull { it.id == id } }
                 val notes = buildList {
+                    if (routine) add("روتين")
                     if (t.pinned && t.open) add("موعد ثابت")
                     if (parent != null && t.open) add("بالتوازي مع ${parent.baseTitle}")
+                    if (t.overflow && t.open) add("ما وسعها وقت اليوم")
                     if (extra != null) add(extra)
                 }
                 if (notes.isNotEmpty()) Muted(notes.joinToString(" · "))
@@ -546,6 +588,7 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, onClick:
                 Text(durLabel(t.minutes), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        }
     }
 }
 
@@ -553,22 +596,23 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, onClick:
 fun DaySheet(s: Snapshot, repo: Repository, nav: Nav, close: () -> Unit, add: () -> Unit, closeDay: () -> Unit) {
     val todays = todayTasks(s)
     val ts = s.today.toString()
-    val rolled = s.tasks.filter { it.day == ts && it.state == "skipped" && it.note == "رُحّلت لليوم التالي" }
     val late = s.tasks.filter { it.open && it.day < ts }
     var showLate by remember { mutableStateOf(false) }
+    var hideRoutine by remember { mutableStateOf(false) }
+    val rules = s.ruleMap
     Sheet("مهام اليوم", close) {
         Muted("${todays.size} مهام · ${todays.count { it.done }} منجزة · ${durLabel(todays.filter { it.open }.sumOf { (Maths.remaining(it, s.now) / 60_000).toInt() })} متبقية")
         if (todays.isEmpty()) Text("لا توجد مهام لهذا اليوم.", style = MaterialTheme.typography.bodyLarge)
         Muted("اضغط مهمة أو اسحبها لتبدأ فيها الآن.")
-        todays.forEach { t ->
+        SwitchRow("إخفاء الروتين (ركّز على المختلف اليوم)", hideRoutine) { hideRoutine = it }
+        todays.filter { !hideRoutine || !isRoutine(it, rules, s.settings) }.forEach { t ->
             if (t.open && !t.running) SwipeToStart(t.id, start = { nav.act { repo.startNow(t.id) }; close() }) {
-                TaskRow(t, todays, s.now) { nav.taskMenu(t) }
-            } else TaskRow(t, todays, s.now) { nav.taskMenu(t) }
+                TaskRow(t, todays, s.now, s = s) { nav.taskMenu(t) }
+            } else TaskRow(t, todays, s.now, s = s) { nav.taskMenu(t) }
         }
-        if (rolled.isNotEmpty()) Muted("رُحّلت لبكرا لأنها ما وسعت اليوم: " + rolled.joinToString("، ") { it.baseTitle })
         if (late.isNotEmpty()) {
             Secondary(if (showLate) "إخفاء المهام المتأخرة" else "المهام المتأخرة · ${late.size}", { showLate = !showLate }, Modifier.fillMaxWidth())
-            if (showLate) late.forEach { t -> TaskRow(t, late, s.now, extra = "من ${t.day}") { nav.openTask(t) } }
+            if (showLate) late.forEach { t -> TaskRow(t, late, s.now, extra = "من ${t.day}", s = s) { nav.openTask(t) } }
         }
         Action("+ إضافة مهمة", add, Modifier.fillMaxWidth())
         Secondary("إغلاق اليوم", closeDay, Modifier.fillMaxWidth())
@@ -597,7 +641,7 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
         }
         if (entries.isEmpty()) item { Muted("لا شيء لبكرا بعد.") }
         items(entries, key = { it.task.id }) { e ->
-            TaskRow(e.task, all, s.now, extra = if (e.virtual) "مقترح" else null) {
+            TaskRow(e.task, all, s.now, extra = if (e.virtual) "مقترح" else null, s = s) {
                 val ruleId = e.task.ruleId
                 if (e.virtual && ruleId != null) nav.act {
                     val id = repo.materializeRule(ruleId, tomorrow)

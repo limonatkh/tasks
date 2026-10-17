@@ -29,7 +29,7 @@ object Alarms {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    data class Event(val at: Long, val title: String, val text: String, val taskId: String?, val canStart: Boolean, val silent: Boolean = false)
+    data class Event(val at: Long, val title: String, val text: String, val taskId: String?, val canStart: Boolean, val silent: Boolean = false, val close: Boolean = false)
 
     /** The task sound the user picked; by default a short notification tone, not the wake-up alarm. */
     fun soundUri(context: Context): android.net.Uri? {
@@ -130,10 +130,15 @@ object Alarms {
         val list = if (settings.alarms) events(tasks, now).filter { it.at > now }.toMutableList() else mutableListOf()
         val tomorrow = Clock.epoch(Clock.today().plusDays(1), 1)
         list += Event(tomorrow, "", "", null, false, silent = true)
+        // Sleep time: the day ends; ask what to do with what is left.
+        val sleepAt = Clock.epoch(Clock.today(), settings.dayEnd)
+        val left = tasks.count { it.open }
+        if (sleepAt > now && left > 0) list += Event(sleepAt, "انتهى يومك", "$left مهام ما خلصت", null, false, close = true)
         list.forEachIndexed { i, e ->
             val intent = Intent(context, AlarmReceiver::class.java)
                 .putExtra("title", e.title).putExtra("text", e.text).putExtra("task", e.taskId)
-                .putExtra("start", e.canStart).putExtra("silent", e.silent).putExtra("id", BASE_CODE + i)
+                .putExtra("start", e.canStart).putExtra("silent", e.silent).putExtra("id", BASE_CODE + i).putExtra("close", e.close)
+                .putExtra("day", Clock.today().toString())
                 .putExtra("insistent", settings.insistent)
             val pi = PendingIntent.getBroadcast(context, BASE_CODE + i, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             try {
@@ -171,6 +176,24 @@ object Alarms {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
+    /** End of day: two buttons, carry or close. Without an answer the default from the settings is used later. */
+    fun closePrompt(context: Context, day: String, text: String) {
+        channels(context)
+        val n = NotificationCompat.Builder(context, alarmChannel(context))
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle("انتهى يومك")
+            .setContentText("$text · ترحّلها لبكرا ولا تسكّرها؟")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(openApp(context))
+            .addAction(0, "ترحيل لبكرا", ActionReceiver.intent(context, ActionReceiver.CLOSE_CARRY, day, CLOSE_ID))
+            .addAction(0, "إغلاق اليوم", ActionReceiver.intent(context, ActionReceiver.CLOSE_SHUT, day, CLOSE_ID))
+            .build()
+        try { NotificationManagerCompat.from(context).notify(CLOSE_ID, n) } catch (_: SecurityException) {}
+    }
+
+    private const val CLOSE_ID = 4
+
     fun ring(context: Context, id: Int, title: String, text: String, taskId: String?, canStart: Boolean, insistent: Boolean) {
         channels(context)
         val b = NotificationCompat.Builder(context, alarmChannel(context))
@@ -199,6 +222,10 @@ class AlarmReceiver : BroadcastReceiver() {
             }
             return
         }
+        if (intent.getBooleanExtra("close", false)) {
+            Alarms.closePrompt(context, intent.getStringExtra("day") ?: Clock.today().toString(), intent.getStringExtra("text") ?: "")
+            return
+        }
         Alarms.ring(
             context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: "",
             intent.getStringExtra("task"), intent.getBooleanExtra("start", false), intent.getBooleanExtra("insistent", true)
@@ -219,6 +246,8 @@ class ActionReceiver : BroadcastReceiver() {
                 val repo = Repository.get(context)
                 val t = repo.store.task(task)
                 when (action) {
+                    CLOSE_CARRY -> repo.closeDay("carry", java.time.LocalDate.parse(task))
+                    CLOSE_SHUT -> repo.closeDay("close", java.time.LocalDate.parse(task))
                     START -> if (t != null && !t.running) repo.timer(task)
                     TOGGLE -> repo.timer(task)
                     FINISH -> repo.finish(task)
@@ -232,6 +261,8 @@ class ActionReceiver : BroadcastReceiver() {
         const val START = "com.imad.planner.START"
         const val TOGGLE = "com.imad.planner.TOGGLE"
         const val FINISH = "com.imad.planner.FINISH"
+        const val CLOSE_CARRY = "com.imad.planner.CLOSE_CARRY"
+        const val CLOSE_SHUT = "com.imad.planner.CLOSE_SHUT"
 
         fun intent(context: Context, action: String, task: String?, notification: Int): PendingIntent {
             val i = Intent(context, ActionReceiver::class.java).setAction(action)

@@ -76,7 +76,7 @@ fun SwipeToStart(key: String, start: () -> Unit, content: @Composable () -> Unit
         state = state,
         backgroundContent = {
             Box(
-                Modifier.fillMaxSize().background(Salmon, RoundedCornerShape(22.dp)).padding(horizontal = 20.dp),
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, RoundedCornerShape(20.dp)).padding(horizontal = 20.dp),
                 contentAlignment = Alignment.CenterStart,
             ) { Text("ابدأ الآن", color = Color.White, fontWeight = FontWeight.Bold) }
         },
@@ -229,6 +229,8 @@ fun GroupsSheet(s: Snapshot, close: () -> Unit, save: (List<Group>) -> Unit) {
                     }
                 } else Muted("الرياضة بتترتب حسب شدة التمرين.")
                 SwitchRow("مسموح وقت الدوام", g.atWork) { list[i] = g.copy(atWork = it) }
+                Text("لون المجموعة", style = MaterialTheme.typography.labelLarge)
+                ColorPicker(g.color) { list[i] = g.copy(color = it) }
                 if (Groups.defaults.none { it.key == g.key }) {
                     if (g.key in used) Muted("فيها أهداف؛ انقلها قبل الحذف.")
                     else TextButton(onClick = { list.removeAt(i) }) { Text("حذف المجموعة") }

@@ -105,7 +105,10 @@ class TaskActions(val reopen: () -> Unit, val toToday: () -> Unit, val postpone:
 fun TaskEditor(
     t: Task, isNew: Boolean, rule: Rule?, now: Long, close: () -> Unit,
     save: (Task, Boolean, List<Int>) -> Unit, saveRule: (Rule) -> Unit, delete: () -> Unit, actions: TaskActions?,
+    routineNow: Boolean = false, colorNow: Int = -1, saveTag: ((Boolean, Int) -> Unit)? = null,
 ) {
+    var routine by remember { mutableStateOf(routineNow) }
+    var color by remember { mutableIntStateOf(colorNow) }
     var recurring by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf(t.title) }
     var minutes by remember { mutableStateOf(t.minutes.toString()) }
@@ -162,11 +165,17 @@ fun TaskEditor(
             Muted("الوقت المصروف: ${durLabel((Maths.spent(t, now) / 60_000).toInt())}")
             if (t.units > 0 && t.isPlan) Muted("الحصة: ${t.units} · تم ${t.doneUnits}")
         }
+        if (saveTag != null) {
+            SwitchRow("مهمة روتينية (لون هادي)", routine) { routine = it }
+            Text("لون المهمة", style = MaterialTheme.typography.labelLarge)
+            ColorPicker(color) { color = it }
+        }
         if (rule != null) Row(Modifier.fillMaxWidth().clickable { asDefault = !asDefault }, verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = asDefault, onCheckedChange = { asDefault = it })
             Text("اجعل هذا التعديل هو الافتراضي", style = MaterialTheme.typography.bodyLarge)
         }
         Action(if (isNew) "حفظ المهمة" else "حفظ", {
+            if (saveTag != null && (routine != routineNow || color != colorNow)) saveTag(routine, color)
             if (isNew && recurring) {
                 saveRule(
                     Rule(
@@ -555,6 +564,13 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
             Muted("ما بينحط شي وقت الدوام إلا المهام أو المجموعات اللي عليها «مسموح وقت الدوام».")
         }
         HorizontalDivider()
+        Text("آخر اليوم", style = MaterialTheme.typography.titleMedium)
+        Muted("وقت النوم بيطلعلك إشعار بزرّين. إذا ما اخترت، هاد الافتراضي:")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = s.closeDefault != "close", onClick = { set("closeDefault", "carry") }, label = { Text("ترحيل لبكرا") })
+            FilterChip(selected = s.closeDefault == "close", onClick = { set("closeDefault", "close") }, label = { Text("إغلاق بدون ترحيل") })
+        }
+        HorizontalDivider()
         Text("مؤقت المهمة", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = s.timerStyle != "analog", onClick = { set("timerStyle", "digital") }, label = { Text("رقمي") })
@@ -591,7 +607,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.5.0")
+        Muted("الإصدار 0.6.0")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }
@@ -608,7 +624,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
 }
 
 @Composable
-fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, moveAll: () -> Unit) {
+fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, finish: (String) -> Unit) {
     val open = todays.filter { it.open }
     Sheet("إغلاق اليوم", close) {
         Text("المخطط: ${todays.size} مهام · ${durLabel(todays.sumOf { it.minutes })}", style = MaterialTheme.typography.bodyLarge)
@@ -618,9 +634,11 @@ fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, moveAll: ()
         if (open.isNotEmpty()) {
             HorizontalDivider()
             open.forEach { Text("• ${it.title}", style = MaterialTheme.typography.bodyLarge) }
-            Action("نقل غير المنجز للغد", moveAll, Modifier.fillMaxWidth())
-            Muted("المهام المتكررة غير المبدوءة لا تُنقل؛ تظهر في موعدها التالي.")
-        }
+            Action("ترحيل لبكرا", { finish("carry") }, Modifier.fillMaxWidth())
+            Muted("بتنتقل لبكرا إجبارياً وبتاخد مكان الشبيهة إلها، وهديك بتتأخر لبعده.")
+            Secondary("إغلاق بدون ترحيل", { finish("close") }, Modifier.fillMaxWidth())
+            Muted("الجدول بيضل زي ما هو، وبتنسجّل بالتقرير إنها ما انعملت.")
+        } else Action("إغلاق اليوم", { finish("close") }, Modifier.fillMaxWidth())
     }
 }
 

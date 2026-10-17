@@ -243,7 +243,7 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
 // ---------------- Groups ----------------
 
 /** A group of goals and tasks. [slot]: where in the day it goes (morning | work | evening | any | sport). */
-data class Group(val key: String, val name: String, val slot: String, val atWork: Boolean = false)
+data class Group(val key: String, val name: String, val slot: String, val atWork: Boolean = false, val color: Int = -1)
 
 object Groups {
     val defaults = listOf(
@@ -256,13 +256,13 @@ object Groups {
             val a = JSONArray(text)
             (0 until a.length()).map { i ->
                 val o = a.getJSONObject(i)
-                Group(o.getString("key"), o.getString("name"), o.optString("slot", "any"), o.optBoolean("atWork"))
+                Group(o.getString("key"), o.getString("name"), o.optString("slot", "any"), o.optBoolean("atWork"), o.optInt("color", -1))
             }
         }.getOrDefault(defaults).ifEmpty { defaults }
     }
     fun encode(list: List<Group>): String {
         val a = JSONArray()
-        list.forEach { g -> a.put(JSONObject().put("key", g.key).put("name", g.name).put("slot", g.slot).put("atWork", g.atWork)) }
+        list.forEach { g -> a.put(JSONObject().put("key", g.key).put("name", g.name).put("slot", g.slot).put("atWork", g.atWork).put("color", g.color)) }
         return a.toString()
     }
     fun slotName(slot: String) = when (slot) {
@@ -295,7 +295,16 @@ data class Settings(
     val jobDays: Int = 0b0011111 or (1 shl 6),
     val timerStyle: String = "digital",
     val groups: List<Group> = Groups.defaults,
+    /** What happens to unfinished tasks when the day ends: carry | close. */
+    val closeDefault: String = "carry",
+    /** series -> colour index (-1 none). */
+    val colors: Map<String, Int> = emptyMap(),
+    /** series -> routine on/off (overrides the automatic choice). */
+    val routine: Map<String, Boolean> = emptyMap(),
 ) {
+    /** Before waking up or after sleep time: no tasks. */
+    fun isNight(minute: Int) = minute < dayStart || minute >= dayEnd
+
     val shape get() = DayShape(dayStart, dayEnd, morning, workEnd, sportEnd)
     val config get() = Config(dayStart, dayEnd, gap, maxSports, maxHeavy, sportGap)
 
@@ -313,7 +322,7 @@ data class Settings(
 
     companion object {
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
-            "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups")
+            "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -324,10 +333,27 @@ data class Settings(
                 jobOn = m["jobOn"] == "1", jobStart = i("jobStart", 9 * 60), jobEnd = i("jobEnd", 17 * 60),
                 jobDays = i("jobDays", 0b1011111), timerStyle = m["timerStyle"] ?: "digital",
                 groups = Groups.parse(m["groups"]),
+                closeDefault = m["closeDefault"] ?: "carry",
+                colors = jsonMap(m["colors"]) { it.toIntOrNull() ?: -1 },
+                routine = jsonMap(m["routine"]) { it == "true" },
             ).also { Cat.groups = it.groups }
         }
     }
 }
+
+fun <T> jsonMap(text: String?, conv: (String) -> T): Map<String, T> =
+    if (text.isNullOrBlank()) emptyMap() else runCatching { JSONObject(text).let { o -> o.keys().asSequence().associateWith { conv(o.get(it).toString()) } } }.getOrDefault(emptyMap())
+
+/** Daily (or 5+ days a week) recurring tasks count as routine unless the user says otherwise. */
+fun isRoutine(t: Task, rules: Map<String, Rule>, s: Settings): Boolean {
+    s.routine[seriesOf(t)]?.let { return it }
+    val r = t.ruleId?.let { rules[it] } ?: return false
+    if (r.id.startsWith("plan-")) return r.everyHours <= 24
+    return if (r.weekdays != 0) Integer.bitCount(r.weekdays) >= 5 else r.everyHours <= 24
+}
+
+/** Colour of a task: its own, else its group's. */
+fun colorIndexOf(t: Task, s: Settings): Int = s.colors[seriesOf(t)]?.takeIf { it >= 0 } ?: s.group(t.category)?.color ?: -1
 
 // ---------------- Helpers ----------------
 
@@ -820,8 +846,17 @@ class Repository(private val context: Context) {
     suspend fun replan() = lock.withLock { replanLocked() }
 
     suspend fun refreshDay() = lock.withLock {
+        autoCloseLocked()
         ensureDayLocked(Clock.today())
         replanLocked()
+    }
+
+    /** Days that ended without the user choosing get the default from the settings. */
+    private suspend fun autoCloseLocked() {
+        val today = Clock.today()
+        val s = settingsLocked()
+        val days = store.allTasks().filter { it.open && !it.running && it.day < today.toString() }.map { it.day }.distinct().sorted()
+        for (d in days) if (store.meta("closed:$d") == null) closeDayLocked(LocalDate.parse(d), s.closeDefault)
     }
 
     /** Creates tomorrow's (or any future day's) tasks so they can be edited. */
@@ -910,10 +945,9 @@ class Repository(private val context: Context) {
         val updated = tasks.map { t ->
             val p = plan.placed[t.id] ?: return@map t.copy(parallelTo = null, overflow = false)
             val inProgress = t.running || t.spent > 0 || t.doneUnits > 0
-            if (p.overflow && !t.pinned && !inProgress) {
-                // Does not fit today: recurring ones come back on their next day, one-off tasks move to tomorrow.
-                return@map if (t.ruleId != null) t.copy(state = "skipped", note = if (t.note.startsWith("grp:")) t.note else "رُحّلت لليوم التالي", parallelTo = null, overflow = false)
-                else t.copy(day = tomorrow, planned = 0, parallelTo = null, overflow = false)
+            if (t.id in plan.capped && !t.pinned && !inProgress) {
+                // Over today's sport limit: it moves to tomorrow and its series shifts with it.
+                return@map t.copy(day = tomorrow, planned = 0, parallelTo = null, overflow = false)
             }
             val start = if (t.pinned && !t.running && t.spent == 0L) t.planned else Clock.epoch(today, p.start)
             t.copy(
@@ -923,7 +957,7 @@ class Repository(private val context: Context) {
             )
         }
         store.putAll(updated)
-        for ((old, new) in tasks.zip(updated)) if (old.open && (new.state == "skipped" || new.day != old.day)) log(old, "rolled", "ما وسعها اليوم")
+        for ((old, new) in tasks.zip(updated)) if (old.open && new.day != old.day) log(old, "rolled", "فوق حد التمارين باليوم")
         Alarms.reschedule(context, updated.filter { it.day == ts }, s)
     }
 
@@ -1111,17 +1145,54 @@ class Repository(private val context: Context) {
     }
 
     /** Moves every unfinished task of today to tomorrow. */
-    suspend fun closeDay(): Int = lock.withLock {
-        val now = System.currentTimeMillis()
-        val today = Clock.today()
-        val open = store.tasksOn(today.toString()).filter { it.open }
-        val tomorrow = today.plusDays(1)
-        open.forEach { t ->
-            if (t.ruleId != null && t.spent == 0L) store.put(t.copy(state = "skipped", started = 0))
-            else store.put(t.copy(day = tomorrow.toString(), spent = Maths.spent(t, now), started = 0, planned = 0, pinned = false))
-        }
+    /**
+     * Ends a day. carry: unfinished tasks move to the next day (and their series shift after them).
+     * close: the plan stays as it is; unfinished tasks are recorded as not done.
+     */
+    suspend fun closeDay(mode: String, day: LocalDate = Clock.today()): Int = lock.withLock {
+        val n = closeDayLocked(day, mode)
         replanLocked()
-        open.size
+        n
+    }
+
+    private suspend fun closeDayLocked(day: LocalDate, mode: String): Int {
+        val now = System.currentTimeMillis()
+        val ds = day.toString()
+        val next = day.plusDays(1)
+        val open = store.tasksOn(ds).filter { it.open }
+        var plans = plansLocked()
+        val mem = memLastOf(plans)
+        for (t0 in open) {
+            val t = if (t0.running) t0.copy(spent = Maths.spent(t0, now), started = 0) else t0
+            if (mode == "carry") {
+                // If tomorrow already has this rule's own task, it steps aside for this one.
+                t.ruleId?.let { rid -> store.tasksOn(next.toString()).filter { it.ruleId == rid && it.open && it.spent == 0L && it.doneUnits == 0 }.forEach { store.delete(it.id) } }
+                store.put(t.copy(day = next.toString(), planned = if (t.pinned && t.planned > 0) Clock.epoch(next, Clock.minuteOfDay(t.planned)) else 0,
+                    parallelTo = null, overflow = false, preferMin = -1))
+                log(t, "postpone", "ترحيل إجباري لليوم التالي")
+            } else {
+                store.put(t.copy(state = "skipped", note = if (t.note.startsWith("grp:")) t.note else "أُغلقت بدون إنجاز", finishedAt = now))
+                log(t, "missed", "أُغلق اليوم وهي غير منجزة" + if (t.isPlan && t.units > t.doneUnits) " (${t.units - t.doneUnits} ما انعملت)" else "")
+                // The plan keeps its dates: the series counts this day as its turn.
+                t.ruleId?.let { rid -> store.rule(rid)?.let { r -> if (r.weekdays == 0) store.put(r.copy(lastDoneDay = maxOf(ds, r.lastDoneDay ?: ""))) } }
+                if (t.isPlan) plans = plans.map { p ->
+                    if ("plan-${p.id}" != t.ruleId || p.kind in setOf("memorize", "amount")) p
+                    else PlanMath.applyUnits(p, (t.units - t.doneUnits).coerceAtLeast(0), mem)
+                }
+            }
+        }
+        savePlansLocked(plans)
+        store.put(Meta("closed:$ds", mode))
+        return open.size
+    }
+
+    suspend fun isClosed(day: LocalDate): Boolean = store.meta("closed:$day") != null
+
+    /** Routine flag and colour of a task's series. */
+    suspend fun setTag(series: String, routine: Boolean, color: Int) = lock.withLock {
+        val r = JSONObject(store.meta("routine")?.takeIf { it.isNotBlank() } ?: "{}").put(series, routine)
+        val c = JSONObject(store.meta("colors")?.takeIf { it.isNotBlank() } ?: "{}").put(series, color)
+        store.put(Meta("routine", r.toString())); store.put(Meta("colors", c.toString()))
     }
 
     // ---------- goals ----------

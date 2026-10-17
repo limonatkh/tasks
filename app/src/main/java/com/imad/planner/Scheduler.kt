@@ -54,6 +54,8 @@ data class DayPlan(
     val placed: Map<String, Placed>,
     val overflow: List<String>,
     val conflicts: List<Pair<String, String>>,
+    /** Sport sessions over the daily limit (they belong to another day, not to "no time left"). */
+    val capped: List<String> = emptyList(),
 )
 
 data class Window(val startSec: Int, val endSec: Int)
@@ -174,7 +176,7 @@ object Scheduler {
             val start = w?.startSec?.div(60) ?: sp.start
             placed[cid] = Placed(cid, start, sp.end, parallelTo = sid, overflow = sp.overflow)
         }
-        return DayPlan(placed, second.overflow, second.conflicts)
+        return DayPlan(placed, second.overflow, second.conflicts, second.capped)
     }
 
     private fun place(items: List<Item>, cfg: Config, now: Int): DayPlan {
@@ -182,6 +184,7 @@ object Scheduler {
         val placed = linkedMapOf<String, Placed>()
         val conflicts = mutableListOf<Pair<String, String>>()
         val overflow = mutableListOf<String>()
+        val capped = mutableListOf<String>()
         val sportOf = items.associate { it.id to it.sport }
 
         fun overlapCheck(p: Placed) {
@@ -213,7 +216,7 @@ object Scheduler {
         for (it in flexible) {
             val around = if (it.atWork) busy else busy + blockers
             if (it.sport > 0 && (sports() >= cfg.maxSports || (it.sport >= 2 && heavies() >= cfg.maxHeavy))) {
-                overflow += it.id
+                overflow += it.id; capped += it.id
                 placed[it.id] = Placed(it.id, floor, floor + it.minutes, overflow = true)
                 continue
             }
@@ -235,7 +238,7 @@ object Scheduler {
                 placed[it.id] = p; busy += p
             }
         }
-        return DayPlan(placed, overflow, conflicts)
+        return DayPlan(placed, overflow, conflicts, capped)
     }
 
     /** Earliest start >= [from] where [minutes] fit with the gap around other tasks and end by [end]. */
