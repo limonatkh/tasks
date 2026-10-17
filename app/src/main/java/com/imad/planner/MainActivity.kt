@@ -136,6 +136,7 @@ class Nav(
     val postpone: (Task) -> Unit,
     val groups: () -> Unit,
     val taskMenu: (Task) -> Unit,
+    val look: (List<String>, Int?, String?) -> Unit,
 )
 
 @Composable
@@ -253,6 +254,7 @@ fun Planner(repo: Repository) {
         report = { series, title -> reportFor = series to title },
         note = { noteFor = it }, postpone = { postponeFor = it }, groups = { groupsOpen = true },
         taskMenu = { menuFor = it },
+        look = { series, color, icon -> act { repo.setLook(series, color, icon) } },
     )
 
     val today = snap.today
@@ -314,7 +316,9 @@ fun Planner(repo: Repository) {
                 note = { noteFor = fresh },
             ),
             routineNow = isRoutine(fresh, snap.ruleMap, snap.settings), colorNow = snap.settings.colors[seriesOf(fresh)] ?: -1,
-            saveTag = { r, c -> act { repo.setTag(seriesOf(fresh), r, c) } })
+            saveTag = { r, c -> act { repo.setTag(seriesOf(fresh), r, c) } },
+            iconNow = snap.settings.icons[seriesOf(fresh)],
+            saveIcon = { i -> act { repo.setLook(listOf(seriesOf(fresh)), null, i) } })
     }
     creating?.let { t ->
         TaskEditor(t, isNew = true, rule = null, now = now,
@@ -451,7 +455,13 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
             when { t.running -> "جارية الآن"; upcoming -> "التالية"; t.spent > 0 -> "متوقفة مؤقتاً"; else -> "الآن" },
             style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
         )
-        Text(t.title, fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { nav.openTask(t) })
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TaskBadge(s.settings.icons[seriesOf(t)], tagColor(colorIndexOf(t, s.settings)), 32.dp)
+            Text(t.title, fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { nav.openTask(t) })
+        }
+        s.plans.firstOrNull { "plan-${it.id}" == t.ruleId && it.kind == "cycle" }?.let { p ->
+            PlanMath.stageDetails(p, 0).takeIf { it.isNotBlank() }?.let { Muted(it) }
+        }
         TimeLine(t.planned, t.minutes, end = true)
         if (t.pinned) Muted("موعد ثابت")
         if (members.isNotEmpty() && !t.running && t.spent == 0L) Muted(members.joinToString(" · ") { "${it.name} ${it.sets}×" })
@@ -555,6 +565,10 @@ fun ReviewControls(t: Task, s: Snapshot, nav: Nav) {
 fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snapshot? = null, onClick: () -> Unit) {
     val routine = s != null && isRoutine(t, s.ruleMap, s.settings)
     val tag = s?.let { tagColor(colorIndexOf(t, it.settings)) }
+    val look = s?.settings?.icons?.get(seriesOf(t))
+    val style = s?.settings?.nameStyle ?: "name"
+    val showBadge = look != null && style != "name"
+    val showName = !showBadge || style != "icon"
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = if (routine) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface),
@@ -571,7 +585,9 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snaps
                     if (t.done) Icon(Icons.Filled.CheckCircle, null, tint = MaterialTheme.colorScheme.tertiary)
                     else if (t.running) Icon(Icons.Filled.PlayCircle, null, tint = MaterialTheme.colorScheme.primary)
                     else if (t.spent > 0) Icon(Icons.Filled.PauseCircle, null, tint = MaterialTheme.colorScheme.primary)
-                    Text(t.title, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                    if (showBadge) TaskBadge(look, tag)
+                    if (showName) Text(t.title, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                    else if (t.phaseCount > 1 || t.isPlan) Text(t.title.substringAfter(": ", t.title).take(24), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 val parent = t.parallelTo?.let { id -> all.firstOrNull { it.id == id } }
                 val notes = buildList {
@@ -628,9 +644,13 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
         Projector.project(tomorrow, 1, s.today, s.tasks, s.rules, s.plans, s.settings)[tomorrow].orEmpty()
     }
     val all = entries.map { it.task }
+    var hideRoutine by remember { mutableStateOf(false) }
+    val rules = s.ruleMap
+    val shown = entries.filter { !hideRoutine || !isRoutine(it.task, rules, s.settings) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Panel {
+                SwitchRow("إخفاء الروتين", hideRoutine) { hideRoutine = it }
                 Text("${entries.size} مهام · ${durLabel(all.sumOf { it.minutes })}", style = MaterialTheme.typography.bodyLarge)
                 if (entries.any { it.virtual }) {
                     Muted("هذا اقتراح التطبيق لبكرا. ثبّته أو عدّل أي مهمة.")
@@ -640,7 +660,7 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
             }
         }
         if (entries.isEmpty()) item { Muted("لا شيء لبكرا بعد.") }
-        items(entries, key = { it.task.id }) { e ->
+        items(shown, key = { it.task.id }) { e ->
             TaskRow(e.task, all, s.now, extra = if (e.virtual) "مقترح" else null, s = s) {
                 val ruleId = e.task.ruleId
                 if (e.virtual && ruleId != null) nav.act {

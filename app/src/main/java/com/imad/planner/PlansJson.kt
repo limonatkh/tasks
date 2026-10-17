@@ -20,6 +20,7 @@ object Plans {
                     dayKey = o.optString("dayKey"), dayDone = o.optInt("dayDone"), dayQuota = o.optInt("dayQuota"),
                     category = o.optString("category"), stages = o.optString("stages"), perWeek = o.optDouble("perWeek", 1.0),
                     khatmaDays = o.optInt("khatmaDays"), startDay = o.optString("startDay"), startDone = o.optInt("startDone"),
+                    content = o.optString("content"), contentMonth = o.optString("contentMonth"),
                 )
             }
         }.getOrDefault(emptyList())
@@ -36,6 +37,7 @@ object Plans {
                     .put("dayKey", p.dayKey).put("dayDone", p.dayDone).put("dayQuota", p.dayQuota)
                     .put("category", p.category).put("stages", p.stages).put("perWeek", p.perWeek)
                     .put("khatmaDays", p.khatmaDays).put("startDay", p.startDay).put("startDone", p.startDone)
+                    .put("content", p.content).put("contentMonth", p.contentMonth)
             )
         }
         return a.toString()

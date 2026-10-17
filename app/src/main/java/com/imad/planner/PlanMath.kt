@@ -47,10 +47,92 @@ data class Plan(
     /** When the plan started and where it stood then (for ahead / behind). */
     val startDay: String = "",
     val startDone: Int = 0,
+    /** Channel plans: content types (JSON) and the month the steps were built for. */
+    val content: String = "",
+    val contentMonth: String = "",
 ) {
-    val stageList: List<String> get() = runCatching {
-        val a = org.json.JSONArray(stages); (0 until a.length()).map { a.getString(it) }
+    /** Steps of one round. Stored as names or as {n: name, m: minutes, d: details}. */
+    val stageItems: List<Stage> get() = Stages.parse(stages)
+    val stageList: List<String> get() = stageItems.map { it.name }
+}
+
+data class Stage(val name: String, val minutes: Int = 0, val details: String = "")
+
+object Stages {
+    fun parse(text: String): List<Stage> = runCatching {
+        val a = org.json.JSONArray(text)
+        (0 until a.length()).map { i ->
+            val o = a.optJSONObject(i)
+            if (o != null) Stage(o.optString("n"), o.optInt("m"), o.optString("d")) else Stage(a.getString(i))
+        }
     }.getOrDefault(emptyList())
+
+    fun encode(list: List<Stage>): String {
+        val a = org.json.JSONArray()
+        list.forEach { a.put(org.json.JSONObject().put("n", it.name).put("m", it.minutes).put("d", it.details)) }
+        return a.toString()
+    }
+
+    /** Steps pasted from ChatGPT: one per line, "name | minutes | details". */
+    fun fromText(text: String): List<Stage> = text.lines().mapNotNull { line ->
+        val clean = line.trim().trimStart('-', '•', '*', ' ').replace(Regex("^\\d+[.)\\-]\\s*"), "")
+        if (clean.isBlank()) return@mapNotNull null
+        val parts = clean.split('|').map { it.trim() }
+        val minutes = parts.getOrNull(1)?.let { Regex("\\d+").find(digitsAscii(it))?.value?.toIntOrNull() } ?: 0
+        val hours = parts.getOrNull(1)?.let { it.contains("ساع") || it.contains("hour", true) } == true
+        Stage(parts[0].take(80), if (hours && minutes in 1..12) minutes * 60 else minutes, parts.getOrNull(2) ?: "")
+    }
+
+    private fun digitsAscii(s: String) = s.map { c -> if (Character.isDigit(c)) ('0' + Character.getNumericValue(c)) else c }.joinToString("")
+}
+
+/** One kind of video for a channel: how many a month, how many work sessions each, and this month's titles. */
+data class ContentType(val name: String, val perMonth: Int, val sessions: Int, val minutes: Int, val titles: List<String> = emptyList())
+
+object Content {
+    fun parse(text: String): List<ContentType> = runCatching {
+        val a = org.json.JSONArray(text)
+        (0 until a.length()).map { i ->
+            val o = a.getJSONObject(i)
+            val t = o.optJSONArray("titles")
+            ContentType(o.getString("name"), o.optInt("perMonth"), o.optInt("sessions", 1), o.optInt("minutes", 60),
+                if (t == null) emptyList() else (0 until t.length()).map { t.getString(it) })
+        }
+    }.getOrDefault(emptyList())
+
+    fun encode(list: List<ContentType>): String {
+        val a = org.json.JSONArray()
+        list.forEach { c ->
+            a.put(org.json.JSONObject().put("name", c.name).put("perMonth", c.perMonth).put("sessions", c.sessions).put("minutes", c.minutes)
+                .put("titles", org.json.JSONArray(c.titles)))
+        }
+        return a.toString()
+    }
+
+    /**
+     * The month's work steps: every video's sessions, interleaved so long videos (hero) spread over the month
+     * while short ones keep coming. The last session of each video is its publishing.
+     */
+    fun monthSteps(types: List<ContentType>): List<Stage> {
+        data class Video(val type: ContentType, val n: Int, var next: Int = 0)
+        val videos = mutableListOf<Video>()
+        types.forEach { t -> for (n in 1..t.perMonth.coerceAtLeast(0)) videos += Video(t, n) }
+        val out = mutableListOf<Stage>()
+        val active = videos.toMutableList()
+        while (active.isNotEmpty()) {
+            val it = active.iterator()
+            while (it.hasNext()) {
+                val v = it.next()
+                val title = v.type.titles.getOrNull(v.n - 1)?.takeIf { s -> s.isNotBlank() }?.let { s -> "«$s»" } ?: "${v.n}"
+                val k = v.next + 1
+                val total = v.type.sessions.coerceAtLeast(1)
+                out += Stage(if (k == total) "نشر ${v.type.name} $title" else "${v.type.name} $title · جلسة $k/$total", v.type.minutes)
+                v.next++
+                if (v.next >= total) it.remove()
+            }
+        }
+        return out
+    }
 }
 
 data class PageRange(val from: Int, val to: Int) {
@@ -278,6 +360,18 @@ object PlanMath {
         }
         return (p.startDone + perDay * days) to p.done.toDouble()
     }
+
+    /** Minutes for [count] units starting [offset] after the pointer (cycle steps can each have their own length). */
+    fun unitMinutes(p: Plan, offset: Int, count: Int): Int {
+        if (p.kind != "cycle") return count * p.minutesPerUnit
+        val st = p.stageItems
+        if (st.isEmpty()) return count * p.minutesPerUnit
+        return (0 until count).sumOf { st[(p.pointer.coerceAtLeast(0) + offset + it) % st.size].minutes.takeIf { m -> m > 0 } ?: p.minutesPerUnit }
+    }
+
+    /** Details of the next step of a cycle plan. */
+    fun stageDetails(p: Plan, offset: Int): String =
+        p.stageItems.takeIf { it.isNotEmpty() }?.let { it[(p.pointer.coerceAtLeast(0) + offset) % it.size].details } ?: ""
 
     /** Plan state after [days] days, assuming each day's amount gets done. */
     fun project(p: Plan, days: Int, memLast: Int, today: LocalDate): Plan {

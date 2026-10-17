@@ -462,7 +462,15 @@ fun YearGoalSheet(y: YearTarget, s: Snapshot, nav: Nav, close: () -> Unit, accep
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Cat.keys.forEach { k -> FilterChip(selected = current == k, onClick = { if (k != current) move(k) }, label = { Text(Cat.name(k)) }) }
         }
-        val series = if (g != null) s.rules.firstOrNull { g.id in Members.goals(it) }?.id else "plan-${p!!.id}"
+        val allSeries = if (g != null) s.rules.filter { g.id in Members.goals(it) }.map { it.id } else listOf("plan-${p!!.id}")
+        if (allSeries.isNotEmpty()) {
+            val currentColor = s.settings.colors[allSeries.first()] ?: -1
+            Text("لون مهامه (بتطلع بهاللون وين ما ظهرت)", style = MaterialTheme.typography.labelLarge)
+            ColorPicker(currentColor) { nav.look(allSeries, it, null) }
+            Text("رمز مهامه", style = MaterialTheme.typography.labelLarge)
+            IconPicker(s.settings.icons[allSeries.first()], tagColor(currentColor)) { nav.look(allSeries, null, it) }
+        }
+        val series = allSeries.firstOrNull()
         if (series != null) Secondary("تقرير الإنجاز", { nav.report(series, g?.name ?: p!!.title) }, Modifier.fillMaxWidth())
         Secondary("إعدادات الهدف", { close(); if (g != null) nav.openGoal(g) else nav.openPlan(p!!) }, Modifier.fillMaxWidth())
     }

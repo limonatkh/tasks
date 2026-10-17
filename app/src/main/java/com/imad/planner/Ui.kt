@@ -416,3 +416,66 @@ fun Sheet(title: String, close: () -> Unit, content: @Composable ColumnScope.() 
         }
     }
 }
+
+// ---------------- Task icons ----------------
+
+/** One-colour icons for the kinds of tasks in the plan. */
+val TaskIcons: List<Pair<String, androidx.compose.ui.graphics.vector.ImageVector>> = listOf(
+    "quran" to androidx.compose.material.icons.Icons.Filled.MenuBook,
+    "read" to androidx.compose.material.icons.Icons.Filled.AutoStories,
+    "listen" to androidx.compose.material.icons.Icons.Filled.Headphones,
+    "memorize" to androidx.compose.material.icons.Icons.Filled.Psychology,
+    "gym" to androidx.compose.material.icons.Icons.Filled.FitnessCenter,
+    "boxing" to androidx.compose.material.icons.Icons.Filled.SportsMma,
+    "run" to androidx.compose.material.icons.Icons.Filled.DirectionsRun,
+    "body" to androidx.compose.material.icons.Icons.Filled.SelfImprovement,
+    "sport" to androidx.compose.material.icons.Icons.Filled.Sports,
+    "code" to androidx.compose.material.icons.Icons.Filled.Code,
+    "game" to androidx.compose.material.icons.Icons.Filled.SportsEsports,
+    "video" to androidx.compose.material.icons.Icons.Filled.Videocam,
+    "edit" to androidx.compose.material.icons.Icons.Filled.Movie,
+    "mic" to androidx.compose.material.icons.Icons.Filled.Mic,
+    "publish" to androidx.compose.material.icons.Icons.Filled.Upload,
+    "write" to androidx.compose.material.icons.Icons.Filled.Edit,
+    "search" to androidx.compose.material.icons.Icons.Filled.Search,
+    "idea" to androidx.compose.material.icons.Icons.Filled.Lightbulb,
+    "shop" to androidx.compose.material.icons.Icons.Filled.ShoppingCart,
+    "learn" to androidx.compose.material.icons.Icons.Filled.School,
+    "work" to androidx.compose.material.icons.Icons.Filled.Work,
+    "design" to androidx.compose.material.icons.Icons.Filled.Brush,
+    "photo" to androidx.compose.material.icons.Icons.Filled.CameraAlt,
+    "sleep" to androidx.compose.material.icons.Icons.Filled.Bedtime,
+)
+
+fun iconOf(key: String?): androidx.compose.ui.graphics.vector.ImageVector? =
+    key?.takeIf { it.startsWith("i:") }?.removePrefix("i:")?.let { k -> TaskIcons.firstOrNull { it.first == k }?.second }
+
+/** The task's icon or short text, in its colour. Nothing when none is set. */
+@Composable
+fun TaskBadge(look: String?, color: Color?, size: Dp = 26.dp) {
+    val c = color ?: MaterialTheme.colorScheme.primary
+    val icon = iconOf(look)
+    when {
+        icon != null -> androidx.compose.material3.Icon(icon, contentDescription = null, tint = c, modifier = Modifier.size(size))
+        look != null && look.startsWith("t:") -> Text(look.removePrefix("t:"), color = c, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.62f).sp, maxLines = 1)
+    }
+}
+
+/** Choose an icon from the list or type a short abbreviation. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun IconPicker(selected: String?, color: Color?, pick: (String) -> Unit) {
+    var abbr by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(selected?.takeIf { it.startsWith("t:") }?.removePrefix("t:") ?: "") }
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(40.dp).background(if (selected.isNullOrEmpty()) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).clickable { pick("") },
+            contentAlignment = Alignment.Center) { Text("—") }
+        TaskIcons.forEach { (k, v) ->
+            val on = selected == "i:$k"
+            Box(Modifier.size(40.dp).background(if (on) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).clickable { pick("i:$k") },
+                contentAlignment = Alignment.Center) {
+                androidx.compose.material3.Icon(v, contentDescription = k, tint = color ?: MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
+            }
+        }
+    }
+    Field(abbr, "أو اختصار (حرفين أو ثلاثة)", { v -> abbr = v.take(4); if (abbr.isNotBlank()) pick("t:" + abbr.trim()) })
+}

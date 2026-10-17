@@ -106,9 +106,11 @@ fun TaskEditor(
     t: Task, isNew: Boolean, rule: Rule?, now: Long, close: () -> Unit,
     save: (Task, Boolean, List<Int>) -> Unit, saveRule: (Rule) -> Unit, delete: () -> Unit, actions: TaskActions?,
     routineNow: Boolean = false, colorNow: Int = -1, saveTag: ((Boolean, Int) -> Unit)? = null,
+    iconNow: String? = null, saveIcon: ((String) -> Unit)? = null,
 ) {
     var routine by remember { mutableStateOf(routineNow) }
     var color by remember { mutableIntStateOf(colorNow) }
+    var icon by remember { mutableStateOf(iconNow ?: "") }
     var recurring by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf(t.title) }
     var minutes by remember { mutableStateOf(t.minutes.toString()) }
@@ -170,12 +172,17 @@ fun TaskEditor(
             Text("لون المهمة", style = MaterialTheme.typography.labelLarge)
             ColorPicker(color) { color = it }
         }
+        if (saveIcon != null) {
+            Text("رمز المهمة", style = MaterialTheme.typography.labelLarge)
+            IconPicker(icon, tagColor(color)) { icon = it }
+        }
         if (rule != null) Row(Modifier.fillMaxWidth().clickable { asDefault = !asDefault }, verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = asDefault, onCheckedChange = { asDefault = it })
             Text("اجعل هذا التعديل هو الافتراضي", style = MaterialTheme.typography.bodyLarge)
         }
         Action(if (isNew) "حفظ المهمة" else "حفظ", {
             if (saveTag != null && (routine != routineNow || color != colorNow)) saveTag(routine, color)
+            if (saveIcon != null && icon != (iconNow ?: "")) saveIcon(icon)
             if (isNew && recurring) {
                 saveRule(
                     Rule(
@@ -332,7 +339,9 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
     var perUnit by remember { mutableStateOf(p.minutesPerUnit.toString()) }
     var phases by remember { mutableStateOf(parsePhases(rule?.phases ?: "")) }
     var khatma by remember { mutableStateOf(if (p.khatmaDays > 0) p.khatmaDays.toString() else "") }
-    var stages by remember { mutableStateOf(p.stageList.joinToString("، ")) }
+    var stageItems by remember { mutableStateOf(p.stageItems) }
+    var types by remember { mutableStateOf(Content.parse(p.content)) }
+    val isChannel = p.content.isNotBlank()
     var perWeek by remember { mutableStateOf(num(p.perWeek)) }
     var group by remember { mutableStateOf(Cat.ofPlan(p)) }
     val today = s.today
@@ -347,7 +356,13 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
         minutesPerUnit = (n(perUnit) ?: p.minutesPerUnit).coerceIn(1, 240),
         configured = true,
         khatmaDays = (n(khatma) ?: 0).coerceIn(0, 3650),
-        stages = if (p.kind == "cycle") org.json.JSONArray(stages.split('،', ',', '\n').map { it.trim() }.filter { it.isNotEmpty() }).toString() else p.stages,
+        stages = when {
+            isChannel -> Stages.encode(Content.monthSteps(types))
+            p.kind == "cycle" -> Stages.encode(stageItems.filter { it.name.isNotBlank() })
+            else -> p.stages
+        },
+        content = if (isChannel) Content.encode(types) else p.content,
+        contentMonth = if (isChannel) java.time.YearMonth.from(s.today).toString() else p.contentMonth,
         perWeek = digits(perWeek).toDoubleOrNull()?.coerceIn(0.1, 14.0) ?: p.perWeek,
         category = group,
         pointer = if (p.kind == "cycle") p.pointer else (n(pointer) ?: 1).coerceIn(1, MUSHAF_PAGES),
@@ -369,13 +384,17 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
                 Muted("الورد بيمشي بالترتيب على صفحات المصحف الـ604. لما يوصل 604 بتبدأ ختمة جديدة من الصفحة 1." + if (p.done > 0) " ختمت ${p.done} مرة." else "")
             }
             "cycle" -> {
-                Field(title, "اسم المشروع", { title = it })
-                Field(stages, "المراحل بالترتيب (افصل بفاصلة)", { stages = it })
-                Field(perWeek, "كم دورة كاملة بالأسبوع", { perWeek = it }, numeric = true)
-                Field(perUnit, "دقائق كل مرحلة", { perUnit = it }, numeric = true)
-                Field(total, "هدف السنة (عدد الحلقات/الإصدارات)", { total = it }, numeric = true)
-                Field(done, "المنجز حتى الآن", { done = it }, numeric = true)
-                Muted("كل يوم بتطلع المرحلة الجاية: مثلاً يوم تحضير، يوم تسجيل، يوم مونتاج… ولما تكمل الدورة بتنحسب حلقة.")
+                Field(title, "الاسم", { title = it })
+                if (isChannel) ContentEditor(types) { types = it }
+                else {
+                    StagesEditor(stageItems, n(perUnit) ?: 60) { stageItems = it }
+                    ChatGptImport(title, 7) { stageItems = it }
+                    Field(perWeek, "كم دورة كاملة بالأسبوع", { perWeek = it }, numeric = true)
+                    Field(perUnit, "دقائق المرحلة الافتراضية", { perUnit = it }, numeric = true)
+                    Field(total, "هدف السنة (عدد الحلقات/الإصدارات، 1 = مرة وحدة)", { total = it }, numeric = true)
+                    Field(done, "المنجز حتى الآن", { done = it }, numeric = true)
+                    Muted("كل يوم بتطلع المرحلة الجاية: يوم تحضير، يوم تصوير، يوم نشر… ولما تكمل الدورة بتنحسب وحدة.")
+                }
             }
             "review" -> {
                 Text(if (mem > 0) "المحفوظ حالياً: صفحات 1–$mem" else "حدّد خطة الحفظ أولاً حتى تُعرف صفحات المراجعة.", style = MaterialTheme.typography.bodyLarge)
@@ -436,16 +455,19 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
     var minutes by remember { mutableStateOf("45") }
     var total by remember { mutableStateOf("") }
     var perDay by remember { mutableStateOf("") }
-    var stagesText by remember { mutableStateOf("") }
+    var stageItems by remember { mutableStateOf(listOf(Stage("", 60))) }
     var perWeekText by remember { mutableStateOf("1") }
+    var once by remember { mutableStateOf(false) }
+    var daysText by remember { mutableStateOf("7") }
+    var types by remember { mutableStateOf(listOf(ContentType("هيلب", 4, 1, 60), ContentType("هب", 4, 2, 60), ContentType("هيرو", 2, 7, 90))) }
     Sheet("هدف جديد", close) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("رقم أوصله", "كمية أخلّصها", "مشروع بمراحل", "عادة متكررة").forEachIndexed { i, s ->
+            listOf("رقم أوصله", "كمية أخلّصها", "مشروع بمراحل", "عادة متكررة", "قناة محتوى").forEachIndexed { i, s ->
                 FilterChip(selected = type == i, onClick = { type = i }, label = { Text(s) })
             }
         }
         Field(name, "اسم الهدف", { name = it })
-        if (type == 0 || type == 3) CategoryPicker(category, sport) { c, sp -> category = c; sport = sp }
+        if (type == 0 || type == 3 || type == 2) CategoryPicker(category, sport) { c, sp -> category = c; sport = sp }
         val months12 = (digits(months).toIntOrNull() ?: 12).coerceIn(1, 60)
         when (type) {
             0 -> {
@@ -489,20 +511,35 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
                 }, Modifier.fillMaxWidth(), enabled = name.isNotBlank() && tt != null && tt > 0)
             }
             2 -> {
-                Field(stagesText, "المراحل بالترتيب (افصل بفاصلة)", { stagesText = it })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Field(perWeekText, "دورات بالأسبوع", { perWeekText = it }, numeric = true, modifier = Modifier.weight(1f))
-                    Field(minutes, "دقائق المرحلة", { minutes = it }, numeric = true, modifier = Modifier.weight(1f))
+                    FilterChip(selected = !once, onClick = { once = false }, label = { Text("بيتكرر") })
+                    FilterChip(selected = once, onClick = { once = true }, label = { Text("مرة وحدة") })
                 }
-                Field(total, "هدف السنة (عدد الحلقات)", { total = it }, numeric = true)
-                val st = stagesText.split('،', ',').map { it.trim() }.filter { it.isNotEmpty() }
+                if (once) Field(daysText, "خلال كم يوم", { daysText = it }, numeric = true)
+                StagesEditor(stageItems, 60) { stageItems = it }
+                ChatGptImport(name, if (once) digits(daysText).toIntOrNull() ?: 7 else 0) { stageItems = it }
+                if (!once) {
+                    Field(perWeekText, "كم دورة كاملة بالأسبوع", { perWeekText = it }, numeric = true)
+                    Field(total, "هدف السنة (عدد الحلقات)", { total = it }, numeric = true)
+                }
+                val st = stageItems.filter { it.name.isNotBlank() }
+                val days = (digits(daysText).toIntOrNull() ?: 7).coerceIn(1, 365)
                 Action("حفظ المشروع", {
-                    savePlan(Plan(id = UUID.randomUUID().toString(), title = name.trim(), kind = "cycle", unit = "حلقة",
-                        total = digits(total).toIntOrNull() ?: 52, pointer = 0, stages = org.json.JSONArray(st).toString(),
-                        perWeek = digits(perWeekText).toDoubleOrNull()?.coerceIn(0.1, 14.0) ?: 1.0,
-                        minutesPerUnit = (digits(minutes).toIntOrNull() ?: 60).coerceIn(5, 600), category = "work",
-                        endDay = today.plusMonths(months12.toLong()).toString(), accepted = true, configured = true))
+                    savePlan(Plan(id = UUID.randomUUID().toString(), title = name.trim(), kind = "cycle", unit = if (once) "مرة" else "حلقة",
+                        total = if (once) 1 else digits(total).toIntOrNull() ?: 52, pointer = 0, stages = Stages.encode(st),
+                        perWeek = if (once) 7.0 / days else digits(perWeekText).toDoubleOrNull()?.coerceIn(0.1, 14.0) ?: 1.0,
+                        minutesPerUnit = 60, category = if (category == "sport") "work" else category,
+                        endDay = if (once) today.plusDays(days.toLong()).toString() else today.plusMonths(months12.toLong()).toString(), accepted = true, configured = true))
                 }, Modifier.fillMaxWidth(), enabled = name.isNotBlank() && st.isNotEmpty())
+            }
+            4 -> {
+                ContentEditor(types) { types = it }
+                Action("حفظ القناة", {
+                    savePlan(Plan(id = UUID.randomUUID().toString(), title = name.trim(), kind = "cycle", unit = "شهر", total = 0, pointer = 0,
+                        stages = Stages.encode(Content.monthSteps(types)), content = Content.encode(types),
+                        contentMonth = java.time.YearMonth.from(today).toString(), perWeek = 7.0 / today.lengthOfMonth(),
+                        minutesPerUnit = 60, category = "work", accepted = true, configured = true))
+                }, Modifier.fillMaxWidth(), enabled = name.isNotBlank() && types.any { it.perMonth > 0 && it.name.isNotBlank() })
             }
             else -> {
                 Field(minutes, "المدة بالدقائق", { minutes = it }, numeric = true)
@@ -571,6 +608,13 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
             FilterChip(selected = s.closeDefault == "close", onClick = { set("closeDefault", "close") }, label = { Text("إغلاق بدون ترحيل") })
         }
         HorizontalDivider()
+        Text("عرض المهام", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = s.nameStyle == "name", onClick = { set("nameStyle", "name") }, label = { Text("الاسم") })
+            FilterChip(selected = s.nameStyle == "both", onClick = { set("nameStyle", "both") }, label = { Text("الرمز والاسم") })
+            FilterChip(selected = s.nameStyle == "icon", onClick = { set("nameStyle", "icon") }, label = { Text("الرمز بدل الاسم") })
+        }
+        HorizontalDivider()
         Text("مؤقت المهمة", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = s.timerStyle != "analog", onClick = { set("timerStyle", "digital") }, label = { Text("رقمي") })
@@ -607,7 +651,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.6.0")
+        Muted("الإصدار 0.7.0")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

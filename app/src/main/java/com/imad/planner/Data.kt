@@ -301,6 +301,10 @@ data class Settings(
     val colors: Map<String, Int> = emptyMap(),
     /** series -> routine on/off (overrides the automatic choice). */
     val routine: Map<String, Boolean> = emptyMap(),
+    /** series -> icon key ("i:<name>") or short text ("t:<abbr>"). */
+    val icons: Map<String, String> = emptyMap(),
+    /** How tasks are shown: name | icon | both. */
+    val nameStyle: String = "both",
 ) {
     /** Before waking up or after sleep time: no tasks. */
     fun isNight(minute: Int) = minute < dayStart || minute >= dayEnd
@@ -322,7 +326,7 @@ data class Settings(
 
     companion object {
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
-            "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine")
+            "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -336,6 +340,7 @@ data class Settings(
                 closeDefault = m["closeDefault"] ?: "carry",
                 colors = jsonMap(m["colors"]) { it.toIntOrNull() ?: -1 },
                 routine = jsonMap(m["routine"]) { it == "true" },
+                icons = jsonMap(m["icons"]) { it }, nameStyle = m["nameStyle"] ?: "both",
             ).also { Cat.groups = it.groups }
         }
     }
@@ -480,7 +485,7 @@ fun buildInstances(r: Rule, day: LocalDate, plan: Plan?, memLast: Int, monthTarg
             if (u <= 0) return@forEach
             out += base.copy(
                 id = idOf(k), phase = k, phaseCount = n, pct = phases[k], units = u,
-                minutes = (u * plan.minutesPerUnit).coerceIn(5, 600),
+                minutes = PlanMath.unitMinutes(plan, off, u).coerceIn(5, 900),
                 title = PlanMath.phaseTitle(plan, off, u, memLast) + phaseSuffix(k, n),
                 pinned = pin && k == 0, planned = if (pin && k == 0) Clock.epoch(day, r.preferredMinute) else 0,
             )
@@ -898,6 +903,16 @@ class Repository(private val context: Context) {
         var plans = plansLocked()
         val mem = memLastOf(plans)
         var changed = false
+        // Channel plans get a new month of steps when the month changes.
+        val ym = java.time.YearMonth.from(today).toString()
+        plans = plans.map { p ->
+            if (p.content.isNotBlank() && p.contentMonth != ym) {
+                changed = true
+                val types = Content.parse(p.content).map { it.copy(titles = emptyList()) }
+                p.copy(stages = Stages.encode(Content.monthSteps(types)), pointer = 0, contentMonth = ym, content = Content.encode(types),
+                    perWeek = 7.0 / today.lengthOfMonth())
+            } else p
+        }
         plans = plans.map { p ->
             if (p.configured && p.dayKey != ts) { changed = true; p.copy(dayKey = ts, dayDone = 0, dayQuota = PlanMath.quotaWithMonth(p, today, mem, monthTargetLocked(p, today))) } else p
         }
@@ -921,7 +936,7 @@ class Repository(private val context: Context) {
                 upd += t.copy(
                     units = u,
                     title = PlanMath.phaseTitle(p, off, left.coerceAtLeast(1), mem) + phaseSuffix(t.phase, t.phaseCount),
-                    minutes = maxOf((u * p.minutesPerUnit).coerceIn(5, 600), spentMin, 1),
+                    minutes = maxOf(PlanMath.unitMinutes(p, off, left.coerceAtLeast(1)).coerceIn(5, 900), spentMin, 1),
                 )
                 off += left
             }
@@ -1187,6 +1202,20 @@ class Repository(private val context: Context) {
     }
 
     suspend fun isClosed(day: LocalDate): Boolean = store.meta("closed:$day") != null
+
+    /** Colour and icon for several series at once (a goal's tasks, set from the year plan). */
+    suspend fun setLook(series: List<String>, color: Int?, icon: String?) = lock.withLock {
+        if (color != null) {
+            val c = JSONObject(store.meta("colors")?.takeIf { it.isNotBlank() } ?: "{}")
+            series.forEach { c.put(it, color) }
+            store.put(Meta("colors", c.toString()))
+        }
+        if (icon != null) {
+            val i = JSONObject(store.meta("icons")?.takeIf { it.isNotBlank() } ?: "{}")
+            series.forEach { if (icon.isEmpty()) i.remove(it) else i.put(it, icon) }
+            store.put(Meta("icons", i.toString()))
+        }
+    }
 
     /** Routine flag and colour of a task's series. */
     suspend fun setTag(series: String, routine: Boolean, color: Int) = lock.withLock {
