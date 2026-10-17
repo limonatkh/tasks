@@ -114,24 +114,24 @@ object Content {
      * while short ones keep coming. The last session of each video is its publishing.
      */
     fun monthSteps(types: List<ContentType>): List<Stage> {
-        data class Video(val type: ContentType, val n: Int, var next: Int = 0)
-        val videos = mutableListOf<Video>()
-        types.forEach { t -> for (n in 1..t.perMonth.coerceAtLeast(0)) videos += Video(t, n) }
-        val out = mutableListOf<Stage>()
-        val active = videos.toMutableList()
-        while (active.isNotEmpty()) {
-            val it = active.iterator()
-            while (it.hasNext()) {
-                val v = it.next()
-                val title = v.type.titles.getOrNull(v.n - 1)?.takeIf { s -> s.isNotBlank() }?.let { s -> "«$s»" } ?: "${v.n}"
-                val k = v.next + 1
-                val total = v.type.sessions.coerceAtLeast(1)
-                out += Stage(if (k == total) "نشر ${v.type.name} $title" else "${v.type.name} $title · جلسة $k/$total", v.type.minutes)
-                v.next++
-                if (v.next >= total) it.remove()
+        // Each video is published at an even point of the month; its sessions lead up to that point.
+        data class Step(val time: Double, val type: Int, val n: Int, val k: Int, val stage: Stage)
+        val total = types.sumOf { it.perMonth.coerceAtLeast(0) * it.sessions.coerceAtLeast(1) }.coerceAtLeast(1)
+        val gap = 1.0 / total
+        val steps = mutableListOf<Step>()
+        types.forEachIndexed { ti, t ->
+            val count = t.perMonth.coerceAtLeast(0)
+            val sessions = t.sessions.coerceAtLeast(1)
+            for (n in 1..count) {
+                val publish = (n - 0.5) / count
+                val title = t.titles.getOrNull(n - 1)?.takeIf { it.isNotBlank() }?.let { "«$it»" } ?: "$n"
+                for (k in 1..sessions) {
+                    val name = if (k == sessions) "نشر ${t.name} $title" else "${t.name} $title · جلسة $k/$sessions"
+                    steps += Step(publish - (sessions - k) * gap, ti, n, k, Stage(name, t.minutes))
+                }
             }
         }
-        return out
+        return steps.sortedWith(compareBy<Step>({ it.time }, { it.type }, { it.n }, { it.k })).map { it.stage }
     }
 }
 

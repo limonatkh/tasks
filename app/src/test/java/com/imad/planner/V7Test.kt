@@ -8,10 +8,12 @@ class V7Test {
     @Test fun heroSessionsSpreadBetweenShortVideos() {
         val steps = Content.monthSteps(listOf(ContentType("هب", 2, 1, 60), ContentType("هيرو", 1, 3, 90, listOf("رحلة"))))
         assertEquals(5, steps.size)
-        assertEquals("نشر هب 1", steps[0].name)
-        assertEquals("هيرو «رحلة» · جلسة 1/3", steps[1].name)
-        assertTrue(steps.last().name.startsWith("نشر هيرو"))
-        assertEquals(90, steps.last().minutes)
+        assertEquals("هيرو «رحلة» · جلسة 1/3", steps[0].name)
+        assertEquals("نشر هب 1", steps[1].name)
+        assertEquals("هيرو «رحلة» · جلسة 2/3", steps[2].name)
+        assertEquals("نشر هيرو «رحلة»", steps[3].name)
+        assertEquals(90, steps[3].minutes)
+        assertEquals("نشر هب 2", steps.last().name)
     }
 
     @Test fun stagesKeepTheirOwnMinutes() {
