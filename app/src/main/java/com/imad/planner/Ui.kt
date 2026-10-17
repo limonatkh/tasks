@@ -21,6 +21,30 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelfImprovement
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Sports
+import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.SportsMma
+import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Work
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -421,30 +445,30 @@ fun Sheet(title: String, close: () -> Unit, content: @Composable ColumnScope.() 
 
 /** One-colour icons for the kinds of tasks in the plan. */
 val TaskIcons: List<Pair<String, androidx.compose.ui.graphics.vector.ImageVector>> = listOf(
-    "quran" to androidx.compose.material.icons.Icons.Filled.MenuBook,
-    "read" to androidx.compose.material.icons.Icons.Filled.AutoStories,
-    "listen" to androidx.compose.material.icons.Icons.Filled.Headphones,
-    "memorize" to androidx.compose.material.icons.Icons.Filled.Psychology,
-    "gym" to androidx.compose.material.icons.Icons.Filled.FitnessCenter,
-    "boxing" to androidx.compose.material.icons.Icons.Filled.SportsMma,
-    "run" to androidx.compose.material.icons.Icons.Filled.DirectionsRun,
-    "body" to androidx.compose.material.icons.Icons.Filled.SelfImprovement,
-    "sport" to androidx.compose.material.icons.Icons.Filled.Sports,
-    "code" to androidx.compose.material.icons.Icons.Filled.Code,
-    "game" to androidx.compose.material.icons.Icons.Filled.SportsEsports,
-    "video" to androidx.compose.material.icons.Icons.Filled.Videocam,
-    "edit" to androidx.compose.material.icons.Icons.Filled.Movie,
-    "mic" to androidx.compose.material.icons.Icons.Filled.Mic,
-    "publish" to androidx.compose.material.icons.Icons.Filled.Upload,
-    "write" to androidx.compose.material.icons.Icons.Filled.Edit,
-    "search" to androidx.compose.material.icons.Icons.Filled.Search,
-    "idea" to androidx.compose.material.icons.Icons.Filled.Lightbulb,
-    "shop" to androidx.compose.material.icons.Icons.Filled.ShoppingCart,
-    "learn" to androidx.compose.material.icons.Icons.Filled.School,
-    "work" to androidx.compose.material.icons.Icons.Filled.Work,
-    "design" to androidx.compose.material.icons.Icons.Filled.Brush,
-    "photo" to androidx.compose.material.icons.Icons.Filled.CameraAlt,
-    "sleep" to androidx.compose.material.icons.Icons.Filled.Bedtime,
+    "quran" to Icons.Filled.MenuBook,
+    "read" to Icons.Filled.AutoStories,
+    "listen" to Icons.Filled.Headphones,
+    "memorize" to Icons.Filled.Psychology,
+    "gym" to Icons.Filled.FitnessCenter,
+    "boxing" to Icons.Filled.SportsMma,
+    "run" to Icons.Filled.DirectionsRun,
+    "body" to Icons.Filled.SelfImprovement,
+    "sport" to Icons.Filled.Sports,
+    "code" to Icons.Filled.Code,
+    "game" to Icons.Filled.SportsEsports,
+    "video" to Icons.Filled.Videocam,
+    "edit" to Icons.Filled.Movie,
+    "mic" to Icons.Filled.Mic,
+    "publish" to Icons.Filled.Upload,
+    "write" to Icons.Filled.Edit,
+    "search" to Icons.Filled.Search,
+    "idea" to Icons.Filled.Lightbulb,
+    "shop" to Icons.Filled.ShoppingCart,
+    "learn" to Icons.Filled.School,
+    "work" to Icons.Filled.Work,
+    "design" to Icons.Filled.Brush,
+    "photo" to Icons.Filled.CameraAlt,
+    "sleep" to Icons.Filled.Bedtime,
 )
 
 fun iconOf(key: String?): androidx.compose.ui.graphics.vector.ImageVector? =
