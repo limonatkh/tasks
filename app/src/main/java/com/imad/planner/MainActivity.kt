@@ -28,6 +28,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
@@ -113,6 +119,8 @@ data class Snapshot(
     val logs: List<GoalLog>, val plans: List<Plan>, val months: Map<String, MonthEntry>, val settings: Settings,
     val audioTree: Uri?, val today: LocalDate, val now: Long, val events: List<Event> = emptyList(),
     val closedToday: Boolean = false,
+    /** Last important action that can be undone ("" when none). */
+    val undoLabel: String = "",
 ) {
     val ruleMap get() = rules.associateBy { it.id }
     val memLast get() = plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0
@@ -137,6 +145,9 @@ class Nav(
     val groups: () -> Unit,
     val taskMenu: (Task) -> Unit,
     val look: (List<String>, Int?, String?) -> Unit,
+    val undo: () -> Unit = {},
+    val movePeriod: (Task) -> Unit = {},
+    val keepRest: (Task) -> Unit = {},
 )
 
 @Composable
@@ -157,6 +168,7 @@ fun Planner(repo: Repository) {
         tasks, goals, projects, rules, logs, Plans.parse(metaMap["plans"]), Months.parse(metaMap["months"]),
         Settings.from(metaMap), metaMap["quranAudio"]?.let(Uri::parse), Clock.today(), now, events,
         closedToday = metaMap.containsKey("closed:${Clock.today()}"),
+        undoLabel = metaMap["undoLabel"].orEmpty(),
     )
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -169,7 +181,10 @@ fun Planner(repo: Repository) {
     var monthEdit by remember { mutableStateOf<MonthTarget?>(null) }
     var yearTarget by remember { mutableStateOf<YearTarget?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
-    var daySheet by remember { mutableStateOf(false) }
+    var prayerOpen by remember { mutableStateOf(false) }
+    var placeFor by remember { mutableStateOf<Task?>(null) }
+    var periodFor by remember { mutableStateOf<Task?>(null) }
+    var keepRestFor by remember { mutableStateOf<Task?>(null) }
     var closeDay by remember { mutableStateOf(false) }
     var restoreText by remember { mutableStateOf<String?>(null) }
     var addMenu by remember { mutableStateOf(false) }
@@ -254,6 +269,9 @@ fun Planner(repo: Repository) {
         report = { series, title -> reportFor = series to title },
         note = { noteFor = it }, postpone = { postponeFor = it }, groups = { groupsOpen = true },
         taskMenu = { menuFor = it },
+        undo = { act { repo.undo()?.let { snackbar.showSnackbar("تراجعت عن: $it") } } },
+        movePeriod = { periodFor = it },
+        keepRest = { keepRestFor = it },
         look = { series, color, icon -> act { repo.setLook(series, color, icon) } },
     )
 
@@ -290,7 +308,7 @@ fun Planner(repo: Repository) {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
-                0 -> TodayTab(snap, repo, nav, showList = { daySheet = true }, add = { creating = emptyTask(today) },
+                0 -> TodayTab(snap, repo, nav, add = { creating = emptyTask(today) }, askClose = { closeDay = true },
                     closeDay = { mode -> act { val n = repo.closeDay(mode); snackbar.showSnackbar(if (mode == "carry") "ترحّلت $n مهام لبكرا" else "انسكّر اليوم") } },
                     goTomorrow = { tab = 1 })
                 1 -> TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) })
@@ -300,7 +318,6 @@ fun Planner(repo: Repository) {
         }
     }
 
-    if (daySheet) DaySheet(snap, repo, nav, close = { daySheet = false }, add = { creating = emptyTask(today) }, closeDay = { daySheet = false; closeDay = true })
     editor?.let { t ->
         val fresh = tasks.firstOrNull { it.id == t.id } ?: t
         TaskEditor(fresh, isNew = false, rule = fresh.ruleId?.let { id -> rules.firstOrNull { it.id == id } }, now = now,
@@ -362,27 +379,39 @@ fun Planner(repo: Repository) {
     }
     reportFor?.let { (series, title) -> ReportSheet(series, title, snap, close = { reportFor = null }, note = { text -> act { repo.store.task(series)?.let { repo.addNote(it.id, text) } ?: snap.tasks.lastOrNull { seriesOf(it) == series }?.let { repo.addNote(it.id, text) } } }) }
     noteFor?.let { t -> TextDialog("ملاحظة على «${t.baseTitle}»", "ليش تأخرت أو ما خلصتها؟", close = { noteFor = null }) { text -> act { repo.addNote(t.id, text); noteFor = null } } }
-    postponeFor?.let { t -> PostponeDialog(t, close = { postponeFor = null }) { text -> act { repo.postpone(t.id, text); postponeFor = null } } }
-    if (groupsOpen) GroupsSheet(snap, close = { groupsOpen = false }, save = { list -> act { repo.saveGroups(list) } })
+    postponeFor?.let { t -> PostponeChoice(t, recurring = t.ruleId != null, close = { postponeFor = null }) { text, mode -> act { repo.postpone(t.id, text, mode); postponeFor = null } } }
+    if (prayerOpen) PrayerSheet(snap.settings, today, close = { prayerOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } })
+    placeFor?.let { t ->
+        PlaceDialog(t.baseTitle, snap.settings.places[seriesOf(t)], snap.settings.groupPeriods[t.category], close = { placeFor = null }) { v -> act { repo.setPlace(seriesOf(t), v) } }
+    }
+    periodFor?.let { t -> PeriodPicker(snap.settings.periodsOn(today), Clock.minuteOfDay(now), close = { periodFor = null }) { k -> act { repo.moveToPeriod(t.id, k) } } }
+    keepRestFor?.let { t -> KeepRestDialog(t, close = { keepRestFor = null }) { m -> act { repo.stopKeepRest(t.id, m); keepRestFor = null } } }
+    if (groupsOpen) GroupsSheet(snap, close = { groupsOpen = false }, save = { list -> act { repo.saveGroups(list) } },
+        setPeriod = { g, p -> act { repo.setGroupPeriod(g, p) } })
     menuFor?.let { t ->
         TaskMenu(t, close = { menuFor = null },
-            startNow = { act { repo.startNow(t.id); menuFor = null; daySheet = false } },
+            startNow = { act { repo.startNow(t.id); menuFor = null } },
+            prayerMode = snap.settings.prayerMode && t.day == today.toString(),
+            movePeriod = { menuFor = null; periodFor = t },
+            place = { menuFor = null; placeFor = t },
+            postpone = if (t.open) ({ menuFor = null; postponeFor = t }) else null,
             details = { menuFor = null; editor = t },
             report = { menuFor = null; reportFor = seriesOf(t) to t.baseTitle },
             note = { menuFor = null; noteFor = t })
     }
-    if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true },
+    if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true }, openPrayers = { prayerOpen = true },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false, snap.settings.insistent) })
     if (closeDay) CloseDayDialog(snap.tasks.filter { it.day == today.toString() && it.state != "skipped" }, now, close = { closeDay = false },
         finish = { mode -> act { val n = repo.closeDay(mode); closeDay = false; snackbar.showSnackbar(if (mode == "carry") "ترحّلت $n مهام لبكرا" else "انسكّر اليوم") } })
     restoreText?.let { text ->
-        AlertDialog(
-            onDismissRequest = { restoreText = null },
-            title = { Text("استعادة البيانات؟") },
-            text = { Text("ستستبدل البيانات الحالية بمحتويات الملف. المؤقتات المستعادة تكون متوقفة.") },
-            confirmButton = { TextButton(onClick = { restoreText = null; act { repo.restore(text); snackbar.showSnackbar("تمت الاستعادة") } }) { Text("استعادة") } },
-            dismissButton = { TextButton(onClick = { restoreText = null }) { Text("إلغاء") } },
-        )
+        RestorePreview(text, close = { restoreText = null }) {
+            act {
+                repo.restore(text)
+                if (snackbar.showSnackbar("تمت الاستعادة", actionLabel = "تراجع", withDismissAction = true) == SnackbarResult.ActionPerformed) {
+                    repo.undo(); snackbar.showSnackbar("رجعت بياناتك زي ما كانت قبل الاستعادة")
+                }
+            }
+        }
     }
 }
 
@@ -395,8 +424,9 @@ fun currentTask(todays: List<Task>): Task? =
 fun todayTasks(s: Snapshot) = s.tasks.filter { it.day == s.today.toString() && it.state != "skipped" }
     .sortedWith(compareBy({ if (it.planned == 0L) Long.MAX_VALUE else it.planned }, { it.created }))
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, showList: () -> Unit, add: () -> Unit, closeDay: (String) -> Unit, goTomorrow: () -> Unit) {
+fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit, askClose: () -> Unit, closeDay: (String) -> Unit, goTomorrow: () -> Unit) {
     val todays = todayTasks(s)
     val left = todays.count { it.open }
     val minute = Clock.minuteOfDay(s.now)
@@ -405,7 +435,10 @@ fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, showList: () -> Unit, add:
     val afterSleep = minute >= s.settings.dayEnd || closed
     val running = todays.firstOrNull { it.running }
     val current = if (running != null || (!beforeWake && !afterSleep)) currentTask(todays) else null
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             when {
                 current != null -> CurrentPanel(current, todays, s, repo, nav)
@@ -434,8 +467,140 @@ fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, showList: () -> Unit, add:
                 }
             }
         }
-        item { Secondary(if (left > 0) "باقي مهام اليوم · $left" else "مهام اليوم", showList, Modifier.fillMaxWidth()) }
-        item { Secondary("+ إضافة مهمة", add, Modifier.fillMaxWidth()) }
+        item {
+            if (s.undoLabel.isNotBlank()) TextButton(onClick = nav.undo, modifier = Modifier.fillMaxWidth()) { Text("↶ تراجع عن: ${s.undoLabel}") }
+        }
+        item {
+            Secondary(
+                (if (expanded) "▲ " else "▼ ") + if (left > 0) "باقي مهام اليوم · $left" else "مهام اليوم",
+                {
+                    expanded = !expanded
+                    if (expanded) scope.launch { delay(50); listState.animateScrollToItem(2) }
+                },
+                Modifier.fillMaxWidth(),
+            )
+        }
+        if (expanded) dayList(s, repo, nav, todays, add, askClose) { expanded = false; scope.launch { listState.animateScrollToItem(0) } }
+        else item { Secondary("+ إضافة مهمة", add, Modifier.fillMaxWidth()) }
+    }
+}
+
+/** The rest of today's tasks, on the Today page itself; grouped by prayer periods in prayer mode. */
+@OptIn(ExperimentalLayoutApi::class)
+fun LazyListScope.dayList(s: Snapshot, repo: Repository, nav: Nav, todays: List<Task>, add: () -> Unit, askClose: () -> Unit, collapse: () -> Unit) {
+    val ts = s.today.toString()
+    val late = s.tasks.filter { it.open && it.day < ts }
+    val rules = s.ruleMap
+    item {
+        Muted("${todays.size} مهام · ${todays.count { it.done }} منجزة · ${durLabel(todays.filter { it.open }.sumOf { (Maths.remaining(it, s.now) / 60_000).toInt() })} متبقية")
+        if (todays.isEmpty()) Text("لا توجد مهام لهذا اليوم.", style = MaterialTheme.typography.bodyLarge)
+        Muted("اسحب لليمين لتبدأ فيها، ولليسار: ${swipeLabel(s.settings.swipeAction)}.")
+    }
+    item(key = "hideRoutine") { HideRoutineRow() }
+    val hide = HideRoutine.on
+    val shown = todays.filter { !hide || !isRoutine(it, rules, s.settings) }
+    @Composable fun row(t: Task, extraNote: String? = null) {
+        if (t.open) SwipeRow(
+            start = if (!t.running) ({ nav.act { repo.startNow(t.id) } }) else null,
+            defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction,
+        ) { TaskRow(t, todays, s.now, extra = extraNote, s = s) { nav.taskMenu(t) } }
+        else TaskRow(t, todays, s.now, extra = extraNote, s = s) { nav.taskMenu(t) }
+    }
+    if (s.settings.prayerMode) {
+        val loads = periodLoads(s, todays)
+        val nowMin = Clock.minuteOfDay(s.now)
+        val periods = loads.map { it.period }
+        val inPeriods = loads.flatMap { it.tasks }.map { it.id }.toSet()
+        for (l in loads) {
+            val p = l.period
+            val past = p.end <= nowMin
+            item(key = "period-${p.key}") {
+                PeriodHeader(l, past, nowMin)
+            }
+            if (!PeriodFold.isFolded(p.key, past)) {
+                items(shown.filter { it.id in l.tasks.map { x -> x.id } }, key = { "t-" + it.id }) { t ->
+                    val place = s.settings.placeOf(t)
+                    val home = place?.takeIf { it.startsWith("p:") }?.removePrefix("p:")
+                    val missed = home != null && home != p.key && t.open && t.preferMin < 0
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        row(t, if (missed) "فاتت فترتها (${Prayer.periodNames[home]})" else null)
+                        if (missed) PeriodEndChoices(t, periods, home!!, nowMin, repo, nav)
+                    }
+                }
+            }
+        }
+        val outside = shown.filter { it.id !in inPeriods }
+        if (outside.isNotEmpty()) {
+            item { Text("خارج الفترات أو ما وسعها الوقت", style = MaterialTheme.typography.titleMedium) }
+            items(outside, key = { "t-" + it.id }) { t -> row(t, if (t.overflow && t.open) "انقلها لفترة فيها وقت أو أجّلها" else null) }
+        }
+    } else {
+        items(shown, key = { "t-" + it.id }) { t -> row(t) }
+    }
+    if (late.isNotEmpty()) {
+        item { Text("مهام متأخرة من أيام سابقة · ${late.size}", style = MaterialTheme.typography.titleMedium) }
+        items(late, key = { "late-" + it.id }) { t -> TaskRow(t, late, s.now, extra = "من ${t.day}", s = s) { nav.openTask(t) } }
+    }
+    item {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Action("+ إضافة مهمة", add, Modifier.fillMaxWidth())
+            Secondary("إغلاق اليوم", askClose, Modifier.fillMaxWidth())
+            Secondary("▲ طيّ القائمة", collapse, Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/** Remembers the "hide routine" switch of the day list while the app is open. */
+object HideRoutine { var on by mutableStateOf(false) }
+
+@Composable
+fun HideRoutineRow() { SwitchRow("إخفاء الروتين (ركّز على المختلف اليوم)", HideRoutine.on) { HideRoutine.on = it } }
+
+/** Folded state of the prayer periods; past periods start folded. */
+object PeriodFold {
+    private val state = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+    fun isFolded(key: String, past: Boolean) = state[key] ?: past
+    fun toggle(key: String, past: Boolean) { state[key] = !isFolded(key, past) }
+}
+
+@Composable
+fun PeriodHeader(l: PeriodLoad, past: Boolean, nowMin: Int) {
+    val p = l.period
+    val folded = PeriodFold.isFolded(p.key, past)
+    val now = nowMin in p.start until p.end
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable { PeriodFold.toggle(p.key, past) },
+        colors = CardDefaults.cardColors(containerColor = if (now) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text((if (folded) "◀ " else "▼ ") + p.name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("${fmt12(p.start)} – ${fmt12(p.end)}", style = MaterialTheme.typography.bodyMedium)
+            }
+            val open = l.tasks.count { it.open }
+            Muted(
+                when {
+                    past -> "خلصت · ${l.tasks.count { it.done }} منجزة" + if (open > 0) " · $open مفتوحة" else ""
+                    else -> "فاضي ${durLabel(l.free)} · مطلوب ${durLabel(l.need)} · " +
+                        if (l.balance >= 0) "فايض ${durLabel(l.balance)}" else "ناقص ${durLabel(-l.balance)}"
+                }
+            )
+            if (!past && l.balance < 0) Text("الفترة ما بتساع كل مهامها. انقل وحدة لفترة ثانية أو أجّلها، وما رح أقسم مهمة متصلة بدون إذنك.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/** A task whose period ended: nothing moves by itself, the user picks. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun PeriodEndChoices(t: Task, periods: List<Period>, home: String, nowMin: Int, repo: Repository, nav: Nav) {
+    val next = periods.firstOrNull { it.start >= nowMin || (nowMin in it.start until it.end) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (next != null) FilterChip(selected = false, onClick = { nav.act { repo.moveToPeriod(t.id, next.key) } }, label = { Text("الفترة الحالية/الجاية") })
+        FilterChip(selected = false, onClick = { nav.movePeriod(t) }, label = { Text("اختار فترة") })
+        FilterChip(selected = false, onClick = { nav.postpone(t) }, label = { Text("بكرا") })
+        FilterChip(selected = false, onClick = { nav.act { repo.deferTask(t.id, "close") } }, label = { Text("إغلاق") })
     }
 }
 
@@ -497,9 +662,14 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
             when { t.running -> "إيقاف مؤقت"; t.spent > 0 -> "متابعة"; upcoming -> "ابدأ الآن"; else -> "بدء" },
             { nav.act { repo.timer(t.id) } }, Modifier.fillMaxWidth(),
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (timeUp) Action("إنهاء", { nav.act { repo.finish(t.id) } }, Modifier.weight(1f))
-            else Secondary(if (isMemorize) "حفظتها ✓" else "إنهاء", { nav.act { repo.finish(t.id) } }, Modifier.weight(1f))
+        if (timeUp) {
+            Action(if (isMemorize) "حفظتها ✓" else "أنجزتها ✓", { nav.act { repo.finish(t.id) } }, Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Secondary("تمديد ${s.settings.extend} د", { nav.act { repo.extend(t.id, s.settings.extend) } }, Modifier.weight(1f))
+                Secondary("إيقاف وحفظ المتبقي", { nav.keepRest(t) }, Modifier.weight(1f))
+            }
+        } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Secondary(if (isMemorize) "حفظتها ✓" else "إنهاء", { nav.act { repo.finish(t.id) } }, Modifier.weight(1f))
             Secondary("تمديد ${s.settings.extend} د", { nav.act { repo.extend(t.id, s.settings.extend) } }, Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -605,36 +775,6 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snaps
             }
         }
         }
-    }
-}
-
-@Composable
-fun DaySheet(s: Snapshot, repo: Repository, nav: Nav, close: () -> Unit, add: () -> Unit, closeDay: () -> Unit) {
-    val todays = todayTasks(s)
-    val ts = s.today.toString()
-    val late = s.tasks.filter { it.open && it.day < ts }
-    var showLate by remember { mutableStateOf(false) }
-    var hideRoutine by remember { mutableStateOf(false) }
-    val rules = s.ruleMap
-    Sheet("مهام اليوم", close) {
-        Muted("${todays.size} مهام · ${todays.count { it.done }} منجزة · ${durLabel(todays.filter { it.open }.sumOf { (Maths.remaining(it, s.now) / 60_000).toInt() })} متبقية")
-        if (todays.isEmpty()) Text("لا توجد مهام لهذا اليوم.", style = MaterialTheme.typography.bodyLarge)
-        Muted("اسحب لليمين لتبدأ فيها، ولليسار: ${swipeLabel(s.settings.swipeAction)}.")
-        SwitchRow("إخفاء الروتين (ركّز على المختلف اليوم)", hideRoutine) { hideRoutine = it }
-        todays.filter { !hideRoutine || !isRoutine(it, rules, s.settings) }.forEach { t ->
-            if (t.open) SwipeRow(
-                start = if (!t.running) ({ nav.act { repo.startNow(t.id) }; close() }) else null,
-                defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction,
-            ) {
-                TaskRow(t, todays, s.now, s = s) { nav.taskMenu(t) }
-            } else TaskRow(t, todays, s.now, s = s) { nav.taskMenu(t) }
-        }
-        if (late.isNotEmpty()) {
-            Secondary(if (showLate) "إخفاء المهام المتأخرة" else "المهام المتأخرة · ${late.size}", { showLate = !showLate }, Modifier.fillMaxWidth())
-            if (showLate) late.forEach { t -> TaskRow(t, late, s.now, extra = "من ${t.day}", s = s) { nav.openTask(t) } }
-        }
-        Action("+ إضافة مهمة", add, Modifier.fillMaxWidth())
-        Secondary("إغلاق اليوم", closeDay, Modifier.fillMaxWidth())
     }
 }
 

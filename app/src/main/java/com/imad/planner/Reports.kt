@@ -54,11 +54,17 @@ fun TextDialog(title: String, hint: String, allowEmpty: Boolean = false, close: 
 
 /** Tap on a task in the day list. */
 @Composable
-fun TaskMenu(t: Task, close: () -> Unit, startNow: () -> Unit, details: () -> Unit, report: () -> Unit, note: () -> Unit) {
+fun TaskMenu(
+    t: Task, close: () -> Unit, startNow: () -> Unit, details: () -> Unit, report: () -> Unit, note: () -> Unit,
+    prayerMode: Boolean = false, movePeriod: () -> Unit = {}, place: () -> Unit = {}, postpone: (() -> Unit)? = null,
+) {
     Sheet(t.title, close) {
         TimeLine(t.planned, t.minutes, end = true)
         if (t.open && !t.running) Action("ابدأ فيها الآن", startNow, Modifier.fillMaxWidth())
         if (t.open && !t.running) Muted("المهمة اللي كان وقتها هلأ بتاخد موعد هاي المهمة.")
+        if (prayerMode && t.open) Secondary("نقل لفترة ثانية اليوم", movePeriod, Modifier.fillMaxWidth())
+        if (prayerMode) Secondary("وقتها بالصلوات (دايماً)", place, Modifier.fillMaxWidth())
+        postpone?.let { Secondary("تأجيل لبكرا", it, Modifier.fillMaxWidth()) }
         Secondary("التفاصيل والتعديل", details, Modifier.fillMaxWidth())
         Secondary("التقرير", report, Modifier.fillMaxWidth())
         Secondary("ملاحظة", note, Modifier.fillMaxWidth())
@@ -192,7 +198,9 @@ fun LazyListScope.progressReport(s: Snapshot, nav: Nav) {
         val ahead = diff >= 0
         val st = trainings.firstOrNull()?.let { seriesStats(it.id, s) }
         rows += PaceRow(g.name, trainings.firstOrNull()?.id, ahead,
-            (if (ahead) "متقدم ${num(diff)}٪" else "متأخر ${num(-diff)}٪") + " · المفروض ${num(expected)}٪ وإنت ${num(actual)}٪", advice(ahead, st, g.name))
+            (if (ahead) "متقدم ${num(diff)}٪" else "متأخر ${num(-diff)}٪") + " · المفروض ${num(expected)}٪ وإنت ${num(actual)}٪" +
+                (if (g.lower) " · هدف كل ما قلّ أحسن" else "") + (if (actual > 100) " · فوق ١٠٠٪ يعني تجاوزت الهدف" else ""),
+            advice(ahead, st, g.name))
     }
     for (p in s.plans.filter { it.accepted }) {
         val (expected, actual) = PlanMath.pace(p, s.today) ?: continue
@@ -201,6 +209,20 @@ fun LazyListScope.progressReport(s: Snapshot, nav: Nav) {
         val st = seriesStats("plan-${p.id}", s)
         rows += PaceRow(p.title, "plan-${p.id}", ahead,
             (if (ahead) "متقدم ${num(diff)}" else "متأخر ${num(-diff)}") + " ${p.unit} · المفروض ${num(expected)} وإنت ${num(actual)}", advice(ahead, st, p.title))
+    }
+    val weekStart = s.today.minusDays(6).toString()
+    val weekTasks = s.tasks.filter { it.day in weekStart..s.today.toString() && (it.done || it.state == "skipped") }
+    val moved = s.events.count { it.type == "postpone" && it.day >= weekStart }
+    item {
+        Panel {
+            Text("الالتزام (آخر ٧ أيام)", style = MaterialTheme.typography.titleMedium)
+            if (weekTasks.isEmpty()) Muted("لسا ما في أيام مسكّرة.")
+            else {
+                val done = weekTasks.count { it.done }
+                Text("${done} منجزة من ${weekTasks.size} مهمة انحسمت (${(done * 100 / weekTasks.size)}٪) · $moved تأجيل", style = MaterialTheme.typography.bodyLarge)
+            }
+            Muted("الالتزام = قديش عملت من المهام المجدولة. التقدم تحت = قديش قرّبت من الهدف نفسه. ممكن تكون ملتزم وتقدمك بطيء لو الخطة خفيفة، أو العكس.")
+        }
     }
     item {
         Panel {
@@ -236,7 +258,7 @@ fun LazyListScope.progressReport(s: Snapshot, nav: Nav) {
 // ---------------- Groups ----------------
 
 @Composable
-fun GroupsSheet(s: Snapshot, close: () -> Unit, save: (List<Group>) -> Unit) {
+fun GroupsSheet(s: Snapshot, close: () -> Unit, save: (List<Group>) -> Unit, setPeriod: (String, String) -> Unit = { _, _ -> }) {
     val list = remember { mutableStateListOf<Group>().apply { addAll(s.settings.groups) } }
     val used = (s.goals.map { Cat.ofGoal(it) } + s.plans.map { Cat.ofPlan(it) } + s.rules.map { it.category }).toSet()
     Sheet("المجموعات", close) {
@@ -249,6 +271,14 @@ fun GroupsSheet(s: Snapshot, close: () -> Unit, save: (List<Group>) -> Unit) {
                         FilterChip(selected = g.slot == slot, onClick = { list[i] = g.copy(slot = slot) }, label = { Text(Groups.slotName(slot)) })
                     }
                 } else Muted("الرياضة بتترتب حسب شدة التمرين.")
+                if (s.settings.prayerMode) {
+                    Text("فترتها بنظام الصلوات", style = MaterialTheme.typography.labelLarge)
+                    val cur = s.settings.groupPeriods[g.key]
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = cur == null, onClick = { setPeriod(g.key, "") }, label = { Text("حسب الوقت فوق") })
+                        Prayer.keys.forEach { k -> FilterChip(selected = cur == k, onClick = { setPeriod(g.key, k) }, label = { Text(Prayer.periodNames.getValue(k)) }) }
+                    }
+                }
                 SwitchRow("مسموح وقت الدوام", g.atWork) { list[i] = g.copy(atWork = it) }
                 Text("لون المجموعة", style = MaterialTheme.typography.labelLarge)
                 ColorPicker(g.color) { list[i] = g.copy(color = it) }

@@ -558,7 +558,7 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
 // ---------------- Settings ----------------
 
 @Composable
-fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit, openGroups: () -> Unit, test: () -> Unit) {
+fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit, openGroups: () -> Unit, openPrayers: () -> Unit = {}, test: () -> Unit) {
     val context = LocalContext.current
     var soundName by remember { mutableStateOf(soundTitle(context)) }
     val soundPicker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { res ->
@@ -587,6 +587,15 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         timeRow("نهاية وقت الشغل والمشاريع", "workEnd", s.workEnd)
         timeRow("التمارين الثقيلة بتكون خالصة قبل", "sportEnd", s.sportEnd)
         Secondary("المجموعات وأوقاتها", openGroups, Modifier.fillMaxWidth())
+        HorizontalDivider()
+        Text("ترتيب اليوم بناءً على", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !s.prayerMode, onClick = { set("dayMode", "hours") }, label = { Text("الساعات") })
+            FilterChip(selected = s.prayerMode, onClick = { set("dayMode", "prayer") }, label = { Text("مواعيد الصلاة") })
+        }
+        Muted(if (s.prayerMode) "اليوم بينقسم لفترات بين الصلوات، وكل مجموعة إلها فترة (من «المجموعات وأوقاتها»). وقت الصلاة نفسه محجوز. السجل القديم ما بيتغير."
+              else "اليوم بيتقسم حسب الساعات فوق (الصباح، الشغل، الرياضة).")
+        Secondary("مواقيت الصلاة · لصق جدول الشهر", openPrayers, Modifier.fillMaxWidth())
         HorizontalDivider()
         Text("الدوام", style = MaterialTheme.typography.titleMedium)
         SwitchRow("عندي دوام بالنهار", s.jobOn) { set("jobOn", if (it) "1" else "0") }
@@ -664,7 +673,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.7.1")
+        Muted("الإصدار 0.8")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

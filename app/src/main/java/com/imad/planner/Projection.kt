@@ -44,7 +44,7 @@ object Projector {
                 virtual += buildInstances(r, d, plan, mem) { k -> "v:${r.id}:$ds:$k" }
             }
             val open = real.filter { it.open } + carry.map { it.copy(day = ds, planned = if (it.pinned) it.planned else 0) } + virtual
-            val dp = Scheduler.plan(open.map { itemOf(it, ruleMap, s, null, null) }, s.config, s.dayStart)
+            val dp = Scheduler.plan(open.map { itemOf(it, ruleMap, s, null, null, d) }, s.configFor(d), s.dayStart)
             val virtualIds = virtual.map { it.id }.toSet()
             val placed = mutableListOf<Entry>()
             val nextCarry = mutableListOf<Task>()
