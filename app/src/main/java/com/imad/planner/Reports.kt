@@ -65,22 +65,43 @@ fun TaskMenu(t: Task, close: () -> Unit, startNow: () -> Unit, details: () -> Un
     }
 }
 
-/** Swipe a task row (either way) to start it now. */
+fun swipeLabel(mode: String) = when (mode) { "close" -> "إغلاق"; "later" -> "لوقت فاضي اليوم"; else -> "ترحيل لبكرا" }
+
+/** Swipe right to start (when [start] is given), swipe left for the action chosen in the settings. */
 @Composable
-fun SwipeToStart(key: String, start: () -> Unit, content: @Composable () -> Unit) {
+fun SwipeRow(start: (() -> Unit)?, defer: () -> Unit, deferMode: String, content: @Composable () -> Unit) {
     val state = rememberSwipeToDismissBoxState(confirmValueChange = { v ->
-        if (v != SwipeToDismissBoxValue.Settled) start()
+        when (v) {
+            SwipeToDismissBoxValue.EndToStart -> start?.invoke()
+            SwipeToDismissBoxValue.StartToEnd -> defer()
+            else -> {}
+        }
         false
     })
     SwipeToDismissBox(
         state = state,
+        enableDismissFromEndToStart = start != null,
         backgroundContent = {
+            val toStart = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
             Box(
-                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, RoundedCornerShape(20.dp)).padding(horizontal = 20.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) { Text("ابدأ الآن", color = Color.White, fontWeight = FontWeight.Bold) }
+                Modifier.fillMaxSize().background(if (toStart) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary, RoundedCornerShape(20.dp)).padding(horizontal = 20.dp),
+                contentAlignment = if (toStart) Alignment.CenterEnd else Alignment.CenterStart,
+            ) { Text(if (toStart) "ابدأ الآن" else swipeLabel(deferMode), color = Color.White, fontWeight = FontWeight.Bold) }
         },
     ) { content() }
+}
+
+/** Ask before postponing; the note is optional. */
+@Composable
+fun PostponeDialog(t: Task, close: () -> Unit, done: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("تأجيل «${t.baseTitle}» لبكرا؟") },
+        text = { OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("ملاحظة (اختياري): ليش أجّلتها؟") }, modifier = Modifier.fillMaxWidth(), minLines = 2) },
+        confirmButton = { TextButton(onClick = { done(text) }) { Text("تأجيل") } },
+        dismissButton = { TextButton(onClick = close) { Text("إلغاء") } },
+    )
 }
 
 // ---------------- History of one task ----------------

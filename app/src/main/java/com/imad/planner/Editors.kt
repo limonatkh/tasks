@@ -608,6 +608,19 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
             FilterChip(selected = s.closeDefault == "close", onClick = { set("closeDefault", "close") }, label = { Text("إغلاق بدون ترحيل") })
         }
         HorizontalDivider()
+        Text("السحب لليسار على مهمة", style = MaterialTheme.typography.titleMedium)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = s.swipeAction == "carry", onClick = { set("swipeAction", "carry") }, label = { Text("ترحيل لبكرا") })
+            FilterChip(selected = s.swipeAction == "close", onClick = { set("swipeAction", "close") }, label = { Text("إغلاق") })
+            FilterChip(selected = s.swipeAction == "later", onClick = { set("swipeAction", "later") }, label = { Text("لوقت فاضي اليوم") })
+        }
+        Muted(when (s.swipeAction) {
+            "close" -> "بتنسكّر بدون إنجاز، وهدفها بيرجع بموعدها الجاي بالجدول."
+            "later" -> "بتنتقل لأول وقت فاضي بعدين بنفس اليوم. بشاشة بكرا بتترحّل لليوم اللي بعده."
+            else -> "بتنتقل لليوم اللي بعده، والمهام الشبيهة بعدها بتتأخر."
+        })
+        Muted("السحب لليمين: ابدأ فيها الآن.")
+        HorizontalDivider()
         Text("عرض المهام", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = s.nameStyle == "name", onClick = { set("nameStyle", "name") }, label = { Text("الاسم") })
@@ -651,7 +664,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.7.0")
+        Muted("الإصدار 0.7.1")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

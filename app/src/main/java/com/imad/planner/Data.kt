@@ -305,6 +305,8 @@ data class Settings(
     val icons: Map<String, String> = emptyMap(),
     /** How tasks are shown: name | icon | both. */
     val nameStyle: String = "both",
+    /** Swiping a task the other way: carry | close | later. */
+    val swipeAction: String = "carry",
 ) {
     /** Before waking up or after sleep time: no tasks. */
     fun isNight(minute: Int) = minute < dayStart || minute >= dayEnd
@@ -326,7 +328,7 @@ data class Settings(
 
     companion object {
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
-            "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle")
+            "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle", "swipeAction")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -341,6 +343,7 @@ data class Settings(
                 colors = jsonMap(m["colors"]) { it.toIntOrNull() ?: -1 },
                 routine = jsonMap(m["routine"]) { it == "true" },
                 icons = jsonMap(m["icons"]) { it }, nameStyle = m["nameStyle"] ?: "both",
+                swipeAction = m["swipeAction"] ?: "carry",
             ).also { Cat.groups = it.groups }
         }
     }
@@ -1171,34 +1174,57 @@ class Repository(private val context: Context) {
     }
 
     private suspend fun closeDayLocked(day: LocalDate, mode: String): Int {
-        val now = System.currentTimeMillis()
         val ds = day.toString()
-        val next = day.plusDays(1)
         val open = store.tasksOn(ds).filter { it.open }
-        var plans = plansLocked()
-        val mem = memLastOf(plans)
-        for (t0 in open) {
-            val t = if (t0.running) t0.copy(spent = Maths.spent(t0, now), started = 0) else t0
-            if (mode == "carry") {
-                // If tomorrow already has this rule's own task, it steps aside for this one.
-                t.ruleId?.let { rid -> store.tasksOn(next.toString()).filter { it.ruleId == rid && it.open && it.spent == 0L && it.doneUnits == 0 }.forEach { store.delete(it.id) } }
-                store.put(t.copy(day = next.toString(), planned = if (t.pinned && t.planned > 0) Clock.epoch(next, Clock.minuteOfDay(t.planned)) else 0,
-                    parallelTo = null, overflow = false, preferMin = -1))
-                log(t, "postpone", "ترحيل إجباري لليوم التالي")
-            } else {
-                store.put(t.copy(state = "skipped", note = if (t.note.startsWith("grp:")) t.note else "أُغلقت بدون إنجاز", finishedAt = now))
-                log(t, "missed", "أُغلق اليوم وهي غير منجزة" + if (t.isPlan && t.units > t.doneUnits) " (${t.units - t.doneUnits} ما انعملت)" else "")
-                // The plan keeps its dates: the series counts this day as its turn.
-                t.ruleId?.let { rid -> store.rule(rid)?.let { r -> if (r.weekdays == 0) store.put(r.copy(lastDoneDay = maxOf(ds, r.lastDoneDay ?: ""))) } }
-                if (t.isPlan) plans = plans.map { p ->
-                    if ("plan-${p.id}" != t.ruleId || p.kind in setOf("memorize", "amount")) p
-                    else PlanMath.applyUnits(p, (t.units - t.doneUnits).coerceAtLeast(0), mem)
-                }
-            }
-        }
-        savePlansLocked(plans)
+        for (t in open) endTaskLocked(t, mode, "أُغلق اليوم وهي غير منجزة")
         store.put(Meta("closed:$ds", mode))
         return open.size
+    }
+
+    /**
+     * Takes one unfinished task out of its day.
+     * carry: to the next day (its series follows). close: not done, the plan keeps its dates.
+     */
+    private suspend fun endTaskLocked(t0: Task, mode: String, why: String) {
+        val now = System.currentTimeMillis()
+        val ds = t0.day
+        val next = LocalDate.parse(ds).plusDays(1)
+        val t = if (t0.running) t0.copy(spent = Maths.spent(t0, now), started = 0) else t0
+        if (mode == "carry") {
+            // If the next day already has this rule's own task, it steps aside for this one.
+            t.ruleId?.let { rid -> store.tasksOn(next.toString()).filter { it.ruleId == rid && it.open && it.spent == 0L && it.doneUnits == 0 }.forEach { store.delete(it.id) } }
+            store.put(t.copy(day = next.toString(), planned = if (t.pinned && t.planned > 0) Clock.epoch(next, Clock.minuteOfDay(t.planned)) else 0,
+                parallelTo = null, overflow = false, preferMin = -1))
+            log(t, "postpone", "ترحيل لليوم التالي")
+        } else {
+            store.put(t.copy(state = "skipped", note = if (t.note.startsWith("grp:")) t.note else "أُغلقت بدون إنجاز", finishedAt = now, started = 0))
+            log(t, "missed", why + if (t.isPlan && t.units > t.doneUnits) " (${t.units - t.doneUnits} ما انعملت)" else "")
+            t.ruleId?.let { rid -> store.rule(rid)?.let { r -> if (r.weekdays == 0) store.put(r.copy(lastDoneDay = maxOf(ds, r.lastDoneDay ?: ""))) } }
+            if (t.isPlan) {
+                val plans = plansLocked()
+                val mem = memLastOf(plans)
+                savePlansLocked(plans.map { p ->
+                    if ("plan-${p.id}" != t.ruleId || p.kind in setOf("memorize", "amount")) p
+                    else PlanMath.applyUnits(p, (t.units - t.doneUnits).coerceAtLeast(0), mem)
+                })
+            }
+        }
+    }
+
+    /** Swipe action on one task: carry to the next day, close it, or move it to a free time later the same day. */
+    suspend fun deferTask(id: String, mode: String) = lock.withLock {
+        val t = store.task(id) ?: return@withLock
+        if (!t.open) return@withLock
+        when (mode) {
+            "later" -> {
+                val now = System.currentTimeMillis()
+                val from = maxOf(if (t.planned > 0) Clock.minuteOfDay(t.planned) + t.minutes else 0, Clock.minuteOfDay(now))
+                store.put(t.copy(preferMin = from, started = 0, spent = Maths.spent(t, now), pinned = false))
+                log(t, "postpone", "لوقت فاضي لاحقاً بنفس اليوم")
+            }
+            else -> endTaskLocked(t, mode, "انسكّرت بدون إنجاز")
+        }
+        replanLocked()
     }
 
     suspend fun isClosed(day: LocalDate): Boolean = store.meta("closed:$day") != null

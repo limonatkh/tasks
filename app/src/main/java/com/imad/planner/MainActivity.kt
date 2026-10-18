@@ -362,7 +362,7 @@ fun Planner(repo: Repository) {
     }
     reportFor?.let { (series, title) -> ReportSheet(series, title, snap, close = { reportFor = null }, note = { text -> act { repo.store.task(series)?.let { repo.addNote(it.id, text) } ?: snap.tasks.lastOrNull { seriesOf(it) == series }?.let { repo.addNote(it.id, text) } } }) }
     noteFor?.let { t -> TextDialog("ملاحظة على «${t.baseTitle}»", "ليش تأخرت أو ما خلصتها؟", close = { noteFor = null }) { text -> act { repo.addNote(t.id, text); noteFor = null } } }
-    postponeFor?.let { t -> TextDialog("تأجيل «${t.baseTitle}» لليوم التالي", "السبب (اختياري)", allowEmpty = true, close = { postponeFor = null }) { text -> act { repo.postpone(t.id, text); postponeFor = null } } }
+    postponeFor?.let { t -> PostponeDialog(t, close = { postponeFor = null }) { text -> act { repo.postpone(t.id, text); postponeFor = null } } }
     if (groupsOpen) GroupsSheet(snap, close = { groupsOpen = false }, save = { list -> act { repo.saveGroups(list) } })
     menuFor?.let { t ->
         TaskMenu(t, close = { menuFor = null },
@@ -619,10 +619,13 @@ fun DaySheet(s: Snapshot, repo: Repository, nav: Nav, close: () -> Unit, add: ()
     Sheet("مهام اليوم", close) {
         Muted("${todays.size} مهام · ${todays.count { it.done }} منجزة · ${durLabel(todays.filter { it.open }.sumOf { (Maths.remaining(it, s.now) / 60_000).toInt() })} متبقية")
         if (todays.isEmpty()) Text("لا توجد مهام لهذا اليوم.", style = MaterialTheme.typography.bodyLarge)
-        Muted("اضغط مهمة أو اسحبها لتبدأ فيها الآن.")
+        Muted("اسحب لليمين لتبدأ فيها، ولليسار: ${swipeLabel(s.settings.swipeAction)}.")
         SwitchRow("إخفاء الروتين (ركّز على المختلف اليوم)", hideRoutine) { hideRoutine = it }
         todays.filter { !hideRoutine || !isRoutine(it, rules, s.settings) }.forEach { t ->
-            if (t.open && !t.running) SwipeToStart(t.id, start = { nav.act { repo.startNow(t.id) }; close() }) {
+            if (t.open) SwipeRow(
+                start = if (!t.running) ({ nav.act { repo.startNow(t.id) }; close() }) else null,
+                defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction,
+            ) {
                 TaskRow(t, todays, s.now, s = s) { nav.taskMenu(t) }
             } else TaskRow(t, todays, s.now, s = s) { nav.taskMenu(t) }
         }
@@ -661,6 +664,14 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
         }
         if (entries.isEmpty()) item { Muted("لا شيء لبكرا بعد.") }
         items(shown, key = { it.task.id }) { e ->
+            val mode = s.settings.swipeAction.let { if (it == "later") "carry" else it }
+            SwipeRow(start = null, deferMode = mode, defer = {
+                val ruleId = e.task.ruleId
+                nav.act {
+                    val id = if (e.virtual && ruleId != null) repo.materializeRule(ruleId, tomorrow) else e.task.id
+                    if (id != null) repo.deferTask(id, mode)
+                }
+            }) {
             TaskRow(e.task, all, s.now, extra = if (e.virtual) "مقترح" else null, s = s) {
                 val ruleId = e.task.ruleId
                 if (e.virtual && ruleId != null) nav.act {
@@ -668,6 +679,7 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
                     val t = id?.let { repo.store.task(it) }
                     if (t != null) nav.openTask(t)
                 } else nav.openTask(e.task)
+            }
             }
         }
     }
