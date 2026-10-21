@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="12dp" android:layoutDirection="rtl"
+    android:background="@drawable/widget_bg">
+    <TextView android:id="@+id/title" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="#E8916B" android:textSize="17sp" android:textStyle="bold" android:text="مخطط حياتي" />
+    <TextView android:id="@+id/sub" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="#B8B2A8" android:textSize="13sp" />
+    <LinearLayout android:id="@+id/row0" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="6dp" android:visibility="gone">
+        <TextView android:id="@+id/name0" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:textColor="#F4F1EC" android:textSize="15sp" android:maxLines="1" android:ellipsize="end" />
+        <TextView android:id="@+id/start0" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="ابدأ" android:textColor="#1C1B19" android:textSize="13sp" android:background="@drawable/widget_button"
+            android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingTop="4dp" android:paddingBottom="4dp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/row1" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="6dp" android:visibility="gone">
+        <TextView android:id="@+id/name1" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:textColor="#F4F1EC" android:textSize="15sp" android:maxLines="1" android:ellipsize="end" />
+        <TextView android:id="@+id/start1" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="ابدأ" android:textColor="#1C1B19" android:textSize="13sp" android:background="@drawable/widget_button"
+            android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingTop="4dp" android:paddingBottom="4dp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/row2" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="6dp" android:visibility="gone">
+        <TextView android:id="@+id/name2" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:textColor="#F4F1EC" android:textSize="15sp" android:maxLines="1" android:ellipsize="end" />
+        <TextView android:id="@+id/start2" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="ابدأ" android:textColor="#1C1B19" android:textSize="13sp" android:background="@drawable/widget_button"
+            android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingTop="4dp" android:paddingBottom="4dp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/row3" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical" android:paddingTop="6dp" android:visibility="gone">
+        <TextView android:id="@+id/name3" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:textColor="#F4F1EC" android:textSize="15sp" android:maxLines="1" android:ellipsize="end" />
+        <TextView android:id="@+id/start3" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="ابدأ" android:textColor="#1C1B19" android:textSize="13sp" android:background="@drawable/widget_button"
+            android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingTop="4dp" android:paddingBottom="4dp" />
+    </LinearLayout>
+</LinearLayout>

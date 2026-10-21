@@ -76,6 +76,8 @@ data class Task(
     val atWork: Boolean = false,
     /** Soft preferred start for today (minute of day), -1 = none. */
     val preferMin: Int = -1,
+    /** Prayer period the task belongs to on its day ("" = not decided yet). Kept even if the period passes. */
+    val period: String = "",
 ) {
     val running get() = started > 0
     val done get() = state == "done"
@@ -207,7 +209,7 @@ interface Store {
     @Query("DELETE FROM goal_logs") suspend fun clearLogs()
 }
 
-@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class, Event::class], version = 3, exportSchema = false)
+@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class, Event::class], version = 4, exportSchema = false)
 abstract class PlannerDb : RoomDatabase() {
     abstract fun store(): Store
 }
@@ -237,6 +239,12 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         db.execSQL("ALTER TABLE tasks ADD COLUMN preferMin INTEGER NOT NULL DEFAULT -1")
         db.execSQL("ALTER TABLE rules ADD COLUMN atWork INTEGER NOT NULL DEFAULT 0")
         db.execSQL("CREATE TABLE IF NOT EXISTS `events` (`id` TEXT NOT NULL, `taskId` TEXT, `series` TEXT NOT NULL, `day` TEXT NOT NULL, `at` INTEGER NOT NULL, `type` TEXT NOT NULL, `text` TEXT NOT NULL, `delayMin` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+    }
+}
+
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE tasks ADD COLUMN period TEXT NOT NULL DEFAULT ''")
     }
 }
 
@@ -308,7 +316,7 @@ data class Settings(
     /** Swiping a task the other way: carry | close | later. */
     val swipeAction: String = "carry",
     /** How the day is arranged: hours (day parts) | prayer (periods between prayers). */
-    val dayMode: String = "hours",
+    val dayMode: String = "prayer",
     /** Pasted monthly prayer sheet (see [Prayer.parse]). */
     val prayers: String = Prayer.SEED,
     /** Minutes kept free before and after each prayer. */
@@ -322,7 +330,19 @@ data class Settings(
     val places: Map<String, String> = emptyMap(),
     /** Minutes of sleep after fajr (0 = none). */
     val fajrNap: Int = 0,
+    /** prayer key -> "before,atAdhan": minutes before (0 = off) and 1/0 for ringing at the prayer time. */
+    val prayerAlarms: Map<String, String> = emptyMap(),
+    /** Summary notification at wake-up. */
+    val morningNote: Boolean = true,
+    /** Notification when a period ends with tasks left. */
+    val periodNote: Boolean = true,
 ) {
+    fun alarmBefore(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(0)?.toIntOrNull() ?: 0
+    fun alarmAtAdhan(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(1) == "1"
+
+    /** Period that a minute of the day falls in (before fajr counts as fajr). */
+    fun periodAt(day: LocalDate, minute: Int): String =
+        periodsOn(day).lastOrNull { minute >= it.start }?.key ?: "fajr"
     private val table: List<PrayerDay> by lazy { Prayer.parse(prayers) }
     val prayerMode get() = dayMode == "prayer"
 
@@ -339,7 +359,8 @@ data class Settings(
     fun periodsOn(day: LocalDate): List<Period> = Prayer.periods(prayersOn(day), dayEnd)
 
     /** Where a task sits in prayer mode: its own choice, else its group's period, else null (by day parts). */
-    fun placeOf(t: Task): String? = places[seriesOf(t)] ?: groupPeriods[t.category]?.let { "p:$it" }
+    fun placeOf(t: Task): String? = t.period.takeIf { it.isNotEmpty() }?.let { "p:$it" }
+        ?: places[seriesOf(t)] ?: groupPeriods[t.category]?.let { "p:$it" }
 
     /** Busy minutes around prayers and the sleep after fajr. */
     fun prayerBlocks(day: LocalDate): List<Pair<Int, Int>> {
@@ -370,7 +391,8 @@ data class Settings(
     companion object {
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
             "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle", "swipeAction",
-            "dayMode", "prayers", "prayerBefore", "prayerAfter", "prayerOffsets", "groupPeriods", "places", "fajrNap")
+            "dayMode", "prayers", "prayerBefore", "prayerAfter", "prayerOffsets", "groupPeriods", "places", "fajrNap",
+            "prayerAlarms", "morningNote", "periodNote")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -386,11 +408,13 @@ data class Settings(
                 routine = jsonMap(m["routine"]) { it == "true" },
                 icons = jsonMap(m["icons"]) { it }, nameStyle = m["nameStyle"] ?: "both",
                 swipeAction = m["swipeAction"] ?: "carry",
-                dayMode = m["dayMode"] ?: "hours", prayers = m["prayers"]?.takeIf { it.isNotBlank() } ?: Prayer.SEED,
+                dayMode = m["dayMode"] ?: "prayer", prayers = m["prayers"]?.takeIf { it.isNotBlank() } ?: Prayer.SEED,
                 prayerBefore = i("prayerBefore", 5), prayerAfter = i("prayerAfter", 15),
                 prayerOffsets = jsonMap(m["prayerOffsets"]) { it.toIntOrNull() ?: 0 },
                 groupPeriods = jsonMap(m["groupPeriods"]) { it }, places = jsonMap(m["places"]) { it },
                 fajrNap = i("fajrNap", 0),
+                prayerAlarms = jsonMap(m["prayerAlarms"]) { it },
+                morningNote = m["morningNote"] != "0", periodNote = m["periodNote"] != "0",
             ).also { Cat.groups = it.groups }
         }
     }
@@ -594,7 +618,7 @@ fun itemOf(t: Task, rules: Map<String, Rule>, s: Settings, nowMs: Long?, nowMin:
 // ---------------- Repository ----------------
 
 class Repository(private val context: Context) {
-    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
     val store: Store = db.store()
     private val lock = Mutex()
 
@@ -614,6 +638,8 @@ class Repository(private val context: Context) {
         if (store.meta("seed-v3") == null) { seedV3(); store.put(Meta("seed-v3", "1")) }
         if (store.meta("seed-v4") == null) { seedV4(); store.put(Meta("seed-v4", "1")) }
         if (store.meta("seed-v5") == null) { seedV5(); store.put(Meta("seed-v5", "1")) }
+        // 0.9: the prayer periods become the main way of arranging the day.
+        if (store.meta("seed-v6") == null) { store.put(Meta("dayMode", "prayer")); store.put(Meta("seed-v6", "1")) }
         ensureDayLocked(Clock.today())
         replanLocked()
     }
@@ -914,6 +940,10 @@ class Repository(private val context: Context) {
 
     suspend fun replan() = lock.withLock { replanLocked() }
 
+    suspend fun refreshWidget() = lock.withLock {
+        PlannerWidget.update(context, store.tasksOn(Clock.today().toString()), settingsLocked())
+    }
+
     suspend fun refreshDay() = lock.withLock {
         autoCloseLocked()
         ensureDayLocked(Clock.today())
@@ -1035,9 +1065,22 @@ class Repository(private val context: Context) {
                 parallelTo = p.parallelTo, overflow = p.overflow,
             )
         }
-        store.putAll(updated)
-        for ((old, new) in tasks.zip(updated)) if (old.open && new.day != old.day) log(old, "rolled", "فوق حد التمارين باليوم")
-        Alarms.reschedule(context, updated.filter { it.day == ts }, s)
+        // Prayer mode: each task of today gets its period once and keeps it, done or not.
+        val final = if (!s.prayerMode) updated else updated.map { t ->
+            if (t.day != ts || t.period.isNotEmpty() || !t.open) return@map t
+            val place = s.placeOf(t)
+            val key = when {
+                place != null && place.startsWith("p:") -> place.removePrefix("p:")
+                place != null && place.startsWith("a:") -> place.split(":").getOrElse(1) { "asr" }
+                t.running || t.spent > 0 -> s.periodAt(today, if (t.planned > 0) Clock.minuteOfDay(t.planned) else nowMin)
+                t.overflow || t.planned == 0L -> ""
+                else -> s.periodAt(today, Clock.minuteOfDay(t.planned))
+            }
+            t.copy(period = key)
+        }
+        store.putAll(final)
+        for ((old, new) in tasks.zip(final)) if (old.open && new.day != old.day) log(old, "rolled", "فوق حد التمارين باليوم")
+        Alarms.reschedule(context, final.filter { it.day == ts }, s)
     }
 
     // ---------- task actions ----------
@@ -1116,12 +1159,14 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    private suspend fun startLocked(t: Task, now: Long) {
-        store.allTasks().filter { it.running && it.id != t.id }
+    private suspend fun startLocked(t0: Task, now: Long) {
+        store.allTasks().filter { it.running && it.id != t0.id }
             .forEach { store.put(it.copy(spent = Maths.spent(it, now), started = 0)); log(it, "pause") }
-        if (Maths.remaining(t, now) <= 0) return
+        // Time already used up: give it a few more minutes instead of silently refusing to start.
+        val t = if (Maths.remaining(t0, now) <= 0) t0.copy(minutes = ((t0.spent + 59_999) / 60_000).toInt() + 10).also { log(it, "extend", "+10 د عند البدء") } else t0
         if (t.spent == 0L) log(t, "start", delay = if (t.planned > 0) ((now - t.planned) / 60_000).toInt() else 0)
-        store.put(t.copy(started = now, day = Clock.today().toString(), planned = if (t.spent == 0L) now else t.planned))
+        val today = Clock.today().toString()
+        store.put(t.copy(started = now, day = today, planned = if (t.spent == 0L) now else t.planned, period = if (t.day == today) t.period else ""))
     }
 
     /** Starts [id] right now; the task that was due now takes its place in the day. */
@@ -1219,7 +1264,7 @@ class Repository(private val context: Context) {
             t.copy(
                 day = tomorrow.toString(), spent = Maths.spent(t, now), started = 0,
                 planned = if (t.pinned) Clock.epoch(tomorrow, Clock.minuteOfDay(t.planned)) else 0,
-                parallelTo = null, overflow = false,
+                parallelTo = null, overflow = false, period = "",
             )
         )
         replanLocked()
@@ -1245,7 +1290,7 @@ class Repository(private val context: Context) {
             log(t, "postpone", listOf("دمج مع جلسة بكرا (+${left} د)", reason).filter { it.isNotBlank() }.joinToString(" · "))
             if (r.weekdays == 0) store.put(r.copy(lastDoneDay = maxOf(t.day, r.lastDoneDay ?: "")))
         } else {
-            store.put(t.copy(day = ts, planned = if (t.pinned) Clock.epoch(tomorrow, Clock.minuteOfDay(t.planned)) else 0, preferMin = -1))
+            store.put(t.copy(day = ts, planned = if (t.pinned) Clock.epoch(tomorrow, Clock.minuteOfDay(t.planned)) else 0, preferMin = -1, period = ""))
             log(t, "postpone", listOf("لبكرا مع جلسة بكرا", reason).filter { it.isNotBlank() }.joinToString(" · "))
             if (r.weekdays == 0) store.put(r.copy(lastDoneDay = maxOf(t0.day, r.lastDoneDay ?: "")))
         }
@@ -1281,7 +1326,7 @@ class Repository(private val context: Context) {
         snapshotLocked("نقل «${t.baseTitle}»")
         val now = System.currentTimeMillis()
         store.put(t.copy(preferMin = maxOf(p.start + s.prayerAfter, if (t.day == Clock.today().toString()) Clock.minuteOfDay(now) else 0),
-            pinned = false, started = 0, spent = Maths.spent(t, now)))
+            pinned = false, started = 0, spent = Maths.spent(t, now), period = key))
         log(t, "postpone", "لفترة ${p.name}")
         replanLocked()
     }
@@ -1307,6 +1352,27 @@ class Repository(private val context: Context) {
     private suspend fun snapshotLocked(label: String) {
         store.put(Meta("undo", backupLocked()))
         store.put(Meta("undoLabel", label))
+        store.put(Meta("undoAt", System.currentTimeMillis().toString()))
+    }
+
+    /** From the period-end notification: the period's open tasks go to the next period, or to tomorrow. */
+    suspend fun movePeriodTasks(from: String, toTomorrow: Boolean) = lock.withLock {
+        val today = Clock.today()
+        val s = settingsLocked()
+        val open = store.tasksOn(today.toString()).filter { it.open && !it.running && it.period == from }
+        if (open.isEmpty()) return@withLock
+        snapshotLocked(if (toTomorrow) "تأجيل مهام فترة ${Prayer.names[from]}" else "نقل مهام فترة ${Prayer.names[from]}")
+        if (toTomorrow) open.forEach { endTaskLocked(it, "carry", "") }
+        else {
+            val periods = s.periodsOn(today)
+            val next = periods.getOrNull(periods.indexOfFirst { it.key == from } + 1)
+            if (next == null) open.forEach { endTaskLocked(it, "carry", "") }
+            else open.forEach { t ->
+                store.put(t.copy(period = next.key, preferMin = next.start + s.prayerAfter))
+                log(t, "postpone", "لفترة ${next.name}")
+            }
+        }
+        replanLocked()
     }
 
     suspend fun undo(): String? = lock.withLock {
@@ -1320,7 +1386,7 @@ class Repository(private val context: Context) {
 
     suspend fun bringToToday(id: String) = lock.withLock {
         val t = store.task(id) ?: return@withLock
-        store.put(t.copy(day = Clock.today().toString(), pinned = false, planned = 0, state = "planned"))
+        store.put(t.copy(day = Clock.today().toString(), pinned = false, planned = 0, state = "planned", period = ""))
         replanLocked()
     }
 
@@ -1362,7 +1428,7 @@ class Repository(private val context: Context) {
             // If the next day already has this rule's own task, it steps aside for this one.
             t.ruleId?.let { rid -> store.tasksOn(next.toString()).filter { it.ruleId == rid && it.open && it.spent == 0L && it.doneUnits == 0 }.forEach { store.delete(it.id) } }
             store.put(t.copy(day = next.toString(), planned = if (t.pinned && t.planned > 0) Clock.epoch(next, Clock.minuteOfDay(t.planned)) else 0,
-                parallelTo = null, overflow = false, preferMin = -1))
+                parallelTo = null, overflow = false, preferMin = -1, period = ""))
             log(t, "postpone", "ترحيل لليوم التالي")
         } else {
             store.put(t.copy(state = "skipped", note = if (t.note.startsWith("grp:")) t.note else "أُغلقت بدون إنجاز", finishedAt = now, started = 0))
@@ -1464,7 +1530,7 @@ class Repository(private val context: Context) {
                     .put("sets", t.sets).put("workSec", t.workSec).put("restSec", t.restSec).put("created", t.created)
                     .put("finishedAt", t.finishedAt).put("category", t.category).put("sport", t.sport).put("phase", t.phase)
                     .put("phaseCount", t.phaseCount).put("pct", t.pct).put("units", t.units).put("doneUnits", t.doneUnits).put("note", t.note)
-                    .put("atWork", t.atWork).put("preferMin", t.preferMin)
+                    .put("atWork", t.atWork).put("preferMin", t.preferMin).put("period", t.period)
             )
         }
         val goals = JSONArray()
@@ -1540,7 +1606,7 @@ class Repository(private val context: Context) {
                         finishedAt = o.optLong("finishedAt"), category = o.optString("category", "other"),
                         sport = o.optInt("sport"), phase = o.optInt("phase"), phaseCount = o.optInt("phaseCount", 1),
                         pct = o.optInt("pct", 100), units = o.optInt("units"), doneUnits = o.optInt("doneUnits"), note = o.optString("note"),
-                        atWork = o.optBoolean("atWork"), preferMin = o.optInt("preferMin", -1),
+                        atWork = o.optBoolean("atWork"), preferMin = o.optInt("preferMin", -1), period = o.optString("period"),
                     )
                 )
             }

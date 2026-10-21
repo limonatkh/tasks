@@ -75,6 +75,24 @@ fun PrayerSheet(s: Settings, today: LocalDate, close: () -> Unit, set: (String, 
             }, Modifier.fillMaxWidth(), enabled = parsed.isNotEmpty())
         }
         Panel {
+            Text("منبهات الصلاة", style = MaterialTheme.typography.titleMedium)
+            Muted("بترن زي المنبه. لكل صلاة: قبلها بكم دقيقة، ومع وقتها.")
+            Prayer.keys.forEach { k ->
+                val before = s.alarmBefore(k)
+                val at = s.alarmAtAdhan(k)
+                fun save(b: Int, a: Boolean) = set("prayerAlarms", JSONObject(s.prayerAlarms.toMap()).put(k, "$b,${if (a) 1 else 0}").toString())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(Prayer.names.getValue(k), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    FilterChip(selected = before > 0, onClick = { save(if (before > 0) 0 else 10, at) }, label = { Text(if (before > 0) "قبل $before د" else "قبل") })
+                    if (before > 0) {
+                        TextButton(onClick = { save((before - 5).coerceAtLeast(5), at) }) { Text("−") }
+                        TextButton(onClick = { save((before + 5).coerceAtMost(120), at) }) { Text("+") }
+                    }
+                    FilterChip(selected = at, onClick = { save(before, !at) }, label = { Text("مع الوقت") })
+                }
+            }
+        }
+        Panel {
             Text("وقت محجوز للصلاة", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Field(before, "دقائق قبل", { before = it; digits(it).toIntOrNull()?.let { v -> if (v in 0..60) set("prayerBefore", v.toString()) } }, numeric = true, modifier = Modifier.weight(1f))
@@ -174,7 +192,7 @@ fun periodLoads(s: Snapshot, todays: List<Task>): List<PeriodLoad> {
         var taken = 0; var edge = from
         for ((a, b) in busy) { val s0 = maxOf(a, edge); if (b > s0) { taken += b - s0; edge = b } }
         val free = (to - from - taken).coerceAtLeast(0)
-        val inside = todays.filter { t -> t.planned > 0 && Clock.minuteOfDay(t.planned).let { it >= p.start && it < p.end } }
+        val inside = todays.filter { it.period == p.key }
         val need = inside.filter { it.open }.sumOf { ((Maths.remaining(it, s.now) + 59_999) / 60_000).toInt() }
         PeriodLoad(p, inside, free, need)
     }

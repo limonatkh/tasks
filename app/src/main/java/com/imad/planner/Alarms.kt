@@ -29,7 +29,12 @@ object Alarms {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    data class Event(val at: Long, val title: String, val text: String, val taskId: String?, val canStart: Boolean, val silent: Boolean = false, val close: Boolean = false)
+    /** [kind]: task | prayer (rings like an alarm) | note (plain notification) | period (period ended, with actions). */
+    data class Event(val at: Long, val title: String, val text: String, val taskId: String?, val canStart: Boolean, val silent: Boolean = false, val close: Boolean = false,
+                     val kind: String = "task", val period: String = "")
+
+    const val PRAYER_CHANNEL = "planner_prayer_v1"
+    const val NOTE_CHANNEL = "planner_note_v1"
 
     /** The task sound the user picked; by default a short notification tone, not the wake-up alarm. */
     fun soundUri(context: Context): android.net.Uri? {
@@ -65,8 +70,24 @@ object Alarms {
         val timer = NotificationChannel(TIMER_CHANNEL, "المؤقت الجاري", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)
         }
+        val prayer = NotificationChannel(PRAYER_CHANNEL, "منبهات الصلاة", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "ترن زي المنبه قبل الصلاة أو مع وقتها"
+            setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
+            )
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 800, 400, 800)
+            setBypassDnd(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+        val note = NotificationChannel(NOTE_CHANNEL, "ملخصات وتذكيرات", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            description = "ملخص الصبح وتذكير آخر كل فترة"
+        }
         nm.createNotificationChannel(alarm)
         nm.createNotificationChannel(timer)
+        nm.createNotificationChannel(prayer)
+        nm.createNotificationChannel(note)
     }
 
     fun canExact(context: Context): Boolean {
@@ -127,7 +148,8 @@ object Alarms {
                 ?.let { am.cancel(it); it.cancel() }
         }
         val now = System.currentTimeMillis()
-        val list = if (settings.alarms) events(tasks, now).filter { it.at > now }.toMutableList() else mutableListOf()
+        val list = if (settings.alarms) taskEvents(tasks, now, settings).filter { it.at > now }.toMutableList() else mutableListOf()
+        list += dayEvents(tasks, now, settings).filter { it.at > now }
         val tomorrow = Clock.epoch(Clock.today().plusDays(1), 1)
         list += Event(tomorrow, "", "", null, false, silent = true)
         // Sleep time: the day ends; ask what to do with what is left.
@@ -140,6 +162,7 @@ object Alarms {
                 .putExtra("start", e.canStart).putExtra("silent", e.silent).putExtra("id", BASE_CODE + i).putExtra("close", e.close)
                 .putExtra("day", Clock.today().toString())
                 .putExtra("insistent", settings.insistent)
+                .putExtra("kind", e.kind).putExtra("period", e.period)
             val pi = PendingIntent.getBroadcast(context, BASE_CODE + i, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             try {
                 if (canExact(context)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, e.at, pi)
@@ -150,6 +173,72 @@ object Alarms {
         }
         prefs.edit().putInt("count", list.size).apply()
         timerNotification(context, tasks.firstOrNull { it.running }, now)
+        PlannerWidget.update(context, tasks, settings)
+    }
+
+    /**
+     * Task alarms. In prayer mode tasks have no set start, so only the running task's end (and its rest/sets)
+     * and tasks with a fixed time ring. Nothing rings between sleep and wake-up.
+     */
+    fun taskEvents(tasks: List<Task>, now: Long, s: Settings): List<Event> {
+        val all = events(if (s.prayerMode) tasks.filter { it.running || it.pinned } else tasks, now)
+        return all.filter { e -> e.taskId != null && tasks.any { it.id == e.taskId && it.running } || !s.isNight(Clock.minuteOfDay(e.at)) }
+    }
+
+    /** Prayer alarms, the wake-up summary and the period-end reminders of today (and tomorrow's fajr). */
+    fun dayEvents(tasks: List<Task>, now: Long, s: Settings): List<Event> {
+        val out = mutableListOf<Event>()
+        if (!s.prayerMode && s.prayerAlarms.isEmpty()) return out
+        val today = Clock.today()
+        for (d in listOf(today, today.plusDays(1))) {
+            val p = s.prayersOn(d)
+            for (k in Prayer.keys) {
+                if (d != today && k != "fajr") continue
+                val at = Clock.epoch(d, p.at(k))
+                val name = Prayer.names.getValue(k)
+                val before = s.alarmBefore(k)
+                if (before > 0) out += Event(at - before * 60_000L, "صلاة $name بعد $before دقيقة", "الساعة ${fmt12(p.at(k))}", null, false, kind = "prayer")
+                if (s.alarmAtAdhan(k)) out += Event(at, "حان وقت صلاة $name", fmt12(p.at(k)), null, false, kind = "prayer")
+            }
+        }
+        if (!s.prayerMode) return out
+        val periods = s.periodsOn(today)
+        if (s.morningNote) {
+            val counts = periods.mapNotNull { pr -> tasks.count { it.open && it.period == pr.key }.takeIf { it > 0 }?.let { "${pr.name} $it" } }
+            if (counts.isNotEmpty()) out += Event(Clock.epoch(today, s.dayStart), "صباح الخير، هاي خطة اليوم", counts.joinToString(" · "), null, false, kind = "note")
+        }
+        if (s.periodNote) for (pr in periods) {
+            val left = tasks.filter { it.open && !it.running && it.period == pr.key }
+            if (left.isEmpty() || pr.end >= s.dayEnd) continue
+            out += Event(Clock.epoch(today, pr.end - 5), "خلصت فترة ${pr.name} وباقي ${left.size}", left.take(3).joinToString("، ") { it.baseTitle },
+                null, false, kind = "period", period = pr.key)
+        }
+        return out
+    }
+
+    fun prayerRing(context: Context, id: Int, title: String, text: String) {
+        channels(context)
+        val n = NotificationCompat.Builder(context, PRAYER_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat).setContentTitle(title).setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_MAX).setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true).setContentIntent(openApp(context)).setFullScreenIntent(openApp(context), true)
+            .addAction(0, "إيقاف", ActionReceiver.intent(context, ActionReceiver.DISMISS, null, id))
+            .build()
+        n.flags = n.flags or Notification.FLAG_INSISTENT
+        try { NotificationManagerCompat.from(context).notify(id, n) } catch (_: SecurityException) {}
+    }
+
+    fun note(context: Context, id: Int, title: String, text: String, period: String) {
+        channels(context)
+        val b = NotificationCompat.Builder(context, NOTE_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat).setContentTitle(title).setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true).setContentIntent(openApp(context))
+        if (period.isNotEmpty()) {
+            b.addAction(0, "للفترة الجاية", ActionReceiver.intent(context, ActionReceiver.PERIOD_NEXT, period, id))
+            b.addAction(0, "لبكرا", ActionReceiver.intent(context, ActionReceiver.PERIOD_TOMORROW, period, id))
+        }
+        try { NotificationManagerCompat.from(context).notify(id, b.build()) } catch (_: SecurityException) {}
     }
 
     private fun timerNotification(context: Context, running: Task?, now: Long) {
@@ -216,6 +305,8 @@ object Alarms {
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.getBooleanExtra("silent", false)) {
+            // A new day: yesterday's reminders are not needed any more.
+            runCatching { NotificationManagerCompat.from(context).cancelAll() }
             val pending = goAsync()
             Alarms.scope.launch {
                 try { Repository.get(context).refreshDay() } finally { pending.finish() }
@@ -225,6 +316,10 @@ class AlarmReceiver : BroadcastReceiver() {
         if (intent.getBooleanExtra("close", false)) {
             Alarms.closePrompt(context, intent.getStringExtra("day") ?: Clock.today().toString(), intent.getStringExtra("text") ?: "")
             return
+        }
+        when (intent.getStringExtra("kind")) {
+            "prayer" -> { Alarms.prayerRing(context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: ""); return }
+            "note", "period" -> { Alarms.note(context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: "", intent.getStringExtra("period") ?: ""); return }
         }
         Alarms.ring(
             context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: "",
@@ -248,7 +343,9 @@ class ActionReceiver : BroadcastReceiver() {
                 when (action) {
                     CLOSE_CARRY -> repo.closeDay("carry", java.time.LocalDate.parse(task))
                     CLOSE_SHUT -> repo.closeDay("close", java.time.LocalDate.parse(task))
-                    START -> if (t != null && !t.running) repo.timer(task)
+                    START -> if (t != null && !t.running) repo.startNow(task)
+                    PERIOD_NEXT -> repo.movePeriodTasks(task, toTomorrow = false)
+                    PERIOD_TOMORROW -> repo.movePeriodTasks(task, toTomorrow = true)
                     TOGGLE -> repo.timer(task)
                     FINISH -> repo.finish(task)
                 }
@@ -263,6 +360,8 @@ class ActionReceiver : BroadcastReceiver() {
         const val FINISH = "com.imad.planner.FINISH"
         const val CLOSE_CARRY = "com.imad.planner.CLOSE_CARRY"
         const val CLOSE_SHUT = "com.imad.planner.CLOSE_SHUT"
+        const val PERIOD_NEXT = "com.imad.planner.PERIOD_NEXT"
+        const val PERIOD_TOMORROW = "com.imad.planner.PERIOD_TOMORROW"
 
         fun intent(context: Context, action: String, task: String?, notification: Int): PendingIntent {
             val i = Intent(context, ActionReceiver::class.java).setAction(action)

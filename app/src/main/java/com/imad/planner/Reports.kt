@@ -224,6 +224,26 @@ fun LazyListScope.progressReport(s: Snapshot, nav: Nav) {
             Muted("الالتزام = قديش عملت من المهام المجدولة. التقدم تحت = قديش قرّبت من الهدف نفسه. ممكن تكون ملتزم وتقدمك بطيء لو الخطة خفيفة، أو العكس.")
         }
     }
+    if (s.settings.prayerMode) item {
+        val week = s.tasks.filter { it.day in weekStart..s.today.toString() && it.period.isNotEmpty() && it.day < s.today.toString() }
+        Panel {
+            Text("الفترات (آخر ٧ أيام)", style = MaterialTheme.typography.titleMedium)
+            if (week.isEmpty()) Muted("بيظهر بعد أول يوم كامل بنظام الصلوات.")
+            else {
+                val rows = Prayer.keys.map { k -> val l = week.filter { it.period == k }; Triple(k, l.count { it.done }, l.size) }.filter { it.third > 0 }
+                rows.forEach { (k, done, all) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(Prayer.names.getValue(k), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                        Text("$done من $all · ${done * 100 / all}٪", style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                val best = rows.maxByOrNull { it.second.toDouble() / it.third }
+                val worst = rows.minByOrNull { it.second.toDouble() / it.third }
+                if (best != null && worst != null && best.first != worst.first)
+                    Muted("أحسن فترة إلك: ${Prayer.names[best.first]}. حط فيها المهام الثقيلة. فترة ${Prayer.names[worst.first]} بتضيع فيها مهام أكثر، خفّف حملها.")
+            }
+        }
+    }
     item {
         Panel {
             Text("التقدم", style = MaterialTheme.typography.titleMedium)

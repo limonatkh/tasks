@@ -595,7 +595,11 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         }
         Muted(if (s.prayerMode) "اليوم بينقسم لفترات بين الصلوات، وكل مجموعة إلها فترة (من «المجموعات وأوقاتها»). وقت الصلاة نفسه محجوز. السجل القديم ما بيتغير."
               else "اليوم بيتقسم حسب الساعات فوق (الصباح، الشغل، الرياضة).")
-        Secondary("مواقيت الصلاة · لصق جدول الشهر", openPrayers, Modifier.fillMaxWidth())
+        Secondary("مواقيت الصلاة ومنبهاتها", openPrayers, Modifier.fillMaxWidth())
+        if (s.prayerMode) {
+            SwitchRow("إشعار الصبح بخطة اليوم", s.morningNote) { set("morningNote", if (it) "1" else "0") }
+            SwitchRow("تذكير آخر كل فترة فيها مهام باقية", s.periodNote) { set("periodNote", if (it) "1" else "0") }
+        }
         HorizontalDivider()
         Text("الدوام", style = MaterialTheme.typography.titleMedium)
         SwitchRow("عندي دوام بالنهار", s.jobOn) { set("jobOn", if (it) "1" else "0") }
@@ -673,7 +677,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.8")
+        Muted("الإصدار 0.9")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

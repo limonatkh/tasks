@@ -32,8 +32,7 @@ object Prayer {
     val keys = listOf("fajr", "dhuhr", "asr", "maghrib", "isha")
     val names = mapOf("fajr" to "الفجر", "sunrise" to "الشروق", "dhuhr" to "الظهر", "asr" to "العصر", "maghrib" to "المغرب", "isha" to "العشاء")
     val periodNames = mapOf(
-        "fajr" to "الفجر ← الظهر", "dhuhr" to "الظهر ← العصر", "asr" to "العصر ← المغرب",
-        "maghrib" to "المغرب ← العشاء", "isha" to "العشاء ← النوم",
+        "fajr" to "الفجر", "dhuhr" to "الظهر", "asr" to "العصر", "maghrib" to "المغرب", "isha" to "العشاء",
     )
 
     // Gaza; the sheet the user photographs is for Gaza Strip.
