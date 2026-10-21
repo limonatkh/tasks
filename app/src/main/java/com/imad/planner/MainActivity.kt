@@ -505,6 +505,8 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
         toTop()
     }
     val loads = periodLoads(s, todays).associateBy { it.period.key }
+    // Tasks finished before they had a period (older versions) are shown where their time fell.
+    val keyOf: (Task) -> String = { t -> t.period.ifEmpty { if (!t.open && t.planned > 0) s.settings.periodAt(s.today, Clock.minuteOfDay(t.planned)) else "" } }
     val rules = s.ruleMap
     LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
@@ -517,7 +519,7 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
         item { UndoRow(s, nav) }
         item { HideRoutineRow() }
         for (p in periods) {
-            val list = all.filter { it.period == p.key && (!HideRoutine.on || !isRoutine(it, rules, s.settings)) }
+            val list = all.filter { keyOf(it) == p.key && (!HideRoutine.on || !isRoutine(it, rules, s.settings)) }
             val over = p.end <= minute
             val open = selected == p.key
             item(key = "h-${p.key}") {
