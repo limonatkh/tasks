@@ -13,6 +13,11 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -345,47 +350,46 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
         bounds.entries.firstOrNull { it.value.contains(at) }?.key?.let { k -> if (k != t.period) assign(t.id, k) }
     }
 
+    val haptic = LocalHapticFeedback.current
+    // The task being moved: where its box was when the drag began, and how far the finger has gone since.
+    var boxStart by remember { mutableStateOf(Offset.Zero) }
+    var touchStart by remember { mutableStateOf(Offset.Zero) }
+    var dragDelta by remember { mutableStateOf(Offset.Zero) }
+    var boxSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    var locked by remember { mutableStateOf<Task?>(null) }
+    var byHandle by remember { mutableStateOf(false) }
+    LaunchedEffect(locked) { if (locked != null) { kotlinx.coroutines.delay(2200); locked = null } }
+
     @Composable
-    fun chip(t: Task, inPeriod: Boolean) {
-        var chipOrigin by remember { mutableStateOf(Offset.Zero) }
+    fun chipBody(t: Task, ghost: Boolean) {
         val tag = tagColor(colorIndexOf(t, s.settings))
         val routine = isRoutine(t, rules, s.settings)
         val look = s.settings.icons[seriesOf(t)]
         val target = s.targets[Targets.dayKey(day)]?.get(seriesOf(t))
-        var handleOrigin by remember { mutableStateOf(Offset.Zero) }
         Row(
             Modifier.fillMaxWidth()
-                .background(if (picked?.id == t.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                .border(if (t.done) 2.dp else 1.dp, if (t.done) Status.done else tag ?: MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-                .onGloballyPositioned { chipOrigin = it.positionInRoot() }
-                .then(if (routine) Modifier else Modifier.pointerInput(t.id, t.period) {
-                    // Hold anywhere on the task, then drag (a quick swipe scrolls the list instead).
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { off -> dragging = t; dragPos = chipOrigin + off; picked = null },
-                        onDrag = { change, amount -> change.consume(); dragPos += amount },
-                        onDragEnd = { dragging?.let { drop(it, dragPos) }; dragging = null },
-                        onDragCancel = { dragging = null },
-                    )
-                })
-                .combinedClickable(enabled = !routine, onClick = { picked = if (picked?.id == t.id) null else t }, onDoubleClick = { details(t) })
+                .background(
+                    when {
+                        ghost -> MaterialTheme.colorScheme.primaryContainer
+                        picked?.id == t.id -> MaterialTheme.colorScheme.primaryContainer
+                        routine -> MaterialTheme.colorScheme.surfaceContainerHighest
+                        else -> MaterialTheme.colorScheme.surface
+                    }, RoundedCornerShape(12.dp))
+                .border(
+                    when { ghost -> 2.dp; locked?.id == t.id -> 2.dp; t.done -> 2.dp; else -> 1.dp },
+                    when {
+                        ghost -> MaterialTheme.colorScheme.primary
+                        locked?.id == t.id -> Status.missed
+                        t.done -> Status.done
+                        else -> tag ?: MaterialTheme.colorScheme.outlineVariant
+                    }, RoundedCornerShape(12.dp))
                 .padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // The handle drags right away, without holding first.
-            if (!routine) Box(
-                Modifier.width(26.dp).height(36.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp))
-                    .onGloballyPositioned { handleOrigin = it.positionInRoot() }
-                    .pointerInput(t.id, t.period) {
-                        detectDragGestures(
-                            onDragStart = { off -> dragging = t; dragPos = handleOrigin + off; picked = null },
-                            onDrag = { change, amount -> change.consume(); dragPos += amount },
-                            onDragEnd = { dragging?.let { drop(it, dragPos) }; dragging = null },
-                            onDragCancel = { dragging = null },
-                        )
-                    },
+            Box(
+                Modifier.width(26.dp).height(36.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.Center,
-            ) { Text("⠿", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            ) { Text(if (routine) "🔒" else "⠿", fontSize = if (routine) 13.sp else 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             if (look != null) TaskBadge(look, tag, 22.dp)
             Column(Modifier.weight(1f)) {
                 Text(if (look != null && s.settings.nameStyle == "icon") t.title.take(12) else t.title, fontSize = 14.sp, maxLines = 2,
@@ -396,6 +400,70 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
         }
     }
 
+    @Composable
+    fun chip(t: Task, inPeriod: Boolean) {
+        var chipOrigin by remember { mutableStateOf(Offset.Zero) }
+        var chipSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+        val routine = isRoutine(t, rules, s.settings)
+        val begin: (Offset) -> Unit = { off ->
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            dragging = t; picked = null
+            boxStart = chipOrigin; boxSize = chipSize
+            touchStart = chipOrigin + off; dragDelta = Offset.Zero
+        }
+        val end: () -> Unit = {
+            dragging?.let { d -> drop(d, touchStart + dragDelta); haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
+            dragging = null
+        }
+        Box(
+            Modifier.fillMaxWidth()
+                .onGloballyPositioned { chipOrigin = it.positionInRoot(); chipSize = it.size }
+                // While it is being moved, its place stays as a faint outline.
+                .graphicsLayer { alpha = if (dragging?.id == t.id) 0.2f else 1f }
+                .then(
+                    if (routine) Modifier.pointerInput(t.id) {
+                        // Routine tasks stay where they are; say so instead of doing nothing.
+                        detectTapGestures(
+                            onTap = { locked = t },
+                            onLongPress = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); locked = t },
+                        )
+                    } else Modifier
+                        .pointerInput(t.id, t.period) {
+                            // Hold anywhere on the box, then move it.
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { off -> if (!byHandle) begin(off) },
+                                onDrag = { change, amount -> if (!byHandle) { change.consume(); dragDelta += amount } },
+                                onDragEnd = { if (!byHandle) end() }, onDragCancel = { if (!byHandle) dragging = null },
+                            )
+                        }
+                        .pointerInput(t.id, t.period, "handle") {
+                            // The handle (on the start side) moves it right away.
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                val handleWidth = 34.dp.toPx()
+                                // The page is right-to-left, so the handle sits on the right edge of the box.
+                                val onHandle = down.position.x > size.width - handleWidth
+                                if (!onHandle) return@awaitEachGesture
+                                down.consume()
+                                byHandle = true
+                                begin(down.position)
+                                var ok = true
+                                while (true) {
+                                    val ev = awaitPointerEvent()
+                                    val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!ch.pressed) break
+                                    dragDelta += ch.position - ch.previousPosition
+                                    ch.consume()
+                                }
+                                if (ok) end()
+                                byHandle = false
+                            }
+                        }
+                        .combinedClickable(onClick = { picked = if (picked?.id == t.id) null else t }, onDoubleClick = { details(t) })
+                ),
+        ) { chipBody(t, ghost = false) }
+    }
+
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).onGloballyPositioned { origin = it.positionInRoot() }) {
@@ -403,7 +471,7 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("ترتيب ${if (day == s.today) "اليوم" else if (day == s.today.plusDays(1)) "بكرا" else dayLabel(day)}", style = MaterialTheme.typography.titleLarge)
-                            Muted("امسك المهمة واسحبها لفترة، أو اضغطها وبعدين اضغط الفترة.")
+                            Muted("اسحب المهمة من ⠿ لفترة، أو امسكها شوي واسحبها. 🔒 روتين ثابت.")
                         }
                         IconButton(onClick = close) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
                     }
@@ -460,12 +528,19 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                     }
                     if (pool.isNotEmpty()) Muted("عند التثبيت: المهام اللي ضلت بالقائمة بتترحّل لليوم اللي بعده.")
                 }
+                locked?.let { t ->
+                    Box(Modifier.align(Alignment.TopCenter).padding(top = 70.dp).background(MaterialTheme.colorScheme.inverseSurface, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                        Text("«${t.baseTitle}» روتين ثابت بفترته، ما بيتحرك", color = MaterialTheme.colorScheme.inverseOnSurface)
+                    }
+                }
                 dragging?.let { t ->
+                    val density = androidx.compose.ui.platform.LocalDensity.current
                     Box(
-                        // Screen coordinates are not mirrored, so the offset must not be either (the page is right-to-left).
-                        Modifier.absoluteOffset { IntOffset((dragPos.x - origin.x - 60.dp.toPx()).roundToInt(), (dragPos.y - origin.y - 24.dp.toPx()).roundToInt()) }
-                            .width(170.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)).padding(10.dp)
-                    ) { Text(t.title, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1) }
+                        Modifier.align(androidx.compose.ui.AbsoluteAlignment.TopLeft)
+                            .absoluteOffset { IntOffset((boxStart.x + dragDelta.x - origin.x).roundToInt(), (boxStart.y + dragDelta.y - origin.y).roundToInt()) }
+                            .width(with(density) { boxSize.width.toDp() })
+                            .graphicsLayer { scaleX = 1.05f; scaleY = 1.05f; shadowElevation = 16f; shape = RoundedCornerShape(12.dp); clip = true }
+                    ) { chipBody(t, ghost = true) }
                 }
             }
         }
