@@ -99,7 +99,8 @@ fun RepeatPicker(everyHours: String, weekdays: Int, setHours: (String) -> Unit, 
 
 // ---------------- Task ----------------
 
-class TaskActions(val reopen: () -> Unit, val toToday: () -> Unit, val postpone: () -> Unit, val report: () -> Unit = {}, val note: () -> Unit = {})
+class TaskActions(val reopen: () -> Unit, val toToday: () -> Unit, val postpone: () -> Unit, val report: () -> Unit = {}, val note: () -> Unit = {},
+                  val quran: () -> Unit = {}, val quranLabel: String = "ربط بورد قرآن")
 
 @Composable
 fun TaskEditor(
@@ -211,6 +212,7 @@ fun TaskEditor(
                 Secondary("التقرير", actions.report, Modifier.weight(1f))
                 Secondary("ملاحظة", actions.note, Modifier.weight(1f))
             }
+            Secondary(actions.quranLabel, actions.quran, Modifier.fillMaxWidth())
             Secondary("حذف المهمة", { confirmDelete = true }, Modifier.fillMaxWidth())
         }
     }
@@ -583,8 +585,11 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Text("شكل اليوم", style = MaterialTheme.typography.titleMedium)
         timeRow("الصحوة", "dayStart", s.dayStart)
         timeRow("النوم", "dayEnd", s.dayEnd)
-        Field(morning, "ساعات الصباح للقرآن والقراءة", { morning = it; digits(it).toDoubleOrNull()?.let { v -> if (v in 0.5..8.0) set("morning", (v * 60).toInt().toString()) } }, numeric = true)
-        timeRow("نهاية وقت الشغل والمشاريع", "workEnd", s.workEnd)
+        // These parts of the day only matter when the day is arranged by hours.
+        if (!s.prayerMode) {
+            Field(morning, "ساعات الصباح للقرآن والقراءة", { morning = it; digits(it).toDoubleOrNull()?.let { v -> if (v in 0.5..8.0) set("morning", (v * 60).toInt().toString()) } }, numeric = true)
+            timeRow("نهاية وقت الشغل والمشاريع", "workEnd", s.workEnd)
+        }
         timeRow("التمارين الثقيلة بتكون خالصة قبل", "sportEnd", s.sportEnd)
         Secondary("المجموعات وأوقاتها", openGroups, Modifier.fillMaxWidth())
         HorizontalDivider()
@@ -652,7 +657,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Field(extend, "مدة التمديد (دقائق)", { extend = it; digits(it).toIntOrNull()?.let { v -> if (v in 1..240) set("extend", v.toString()) } }, numeric = true)
         HorizontalDivider()
         SwitchRow("المنبه عند انتهاء وبدء المهام", s.alarms) { set("alarms", if (it) "1" else "0") }
-        SwitchRow("يرن حتى أوقفه", s.insistent) { set("insistent", if (it) "1" else "0") }
+        Muted("المنبه بيرن ويرجّ لحد دقيقة ونص كحد أقصى، وبعدها بيطفي لحاله.")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("صوت تنبيه المهام: $soundName", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
             TextButton(onClick = {
@@ -677,7 +682,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.9")
+        Muted("الإصدار 0.10")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

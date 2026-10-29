@@ -78,6 +78,8 @@ data class Task(
     val preferMin: Int = -1,
     /** Prayer period the task belongs to on its day ("" = not decided yet). Kept even if the period passes. */
     val period: String = "",
+    /** Free text the user writes on the task (double tap). */
+    val details: String = "",
 ) {
     val running get() = started > 0
     val done get() = state == "done"
@@ -190,6 +192,7 @@ interface Store {
     @Query("SELECT * FROM rules WHERE id = :id") suspend fun rule(id: String): Rule?
     @Query("SELECT * FROM goals WHERE id = :id") suspend fun goal(id: String): Goal?
     @Query("SELECT value FROM meta WHERE `key` = :key") suspend fun meta(key: String): String?
+    @Query("SELECT * FROM meta") suspend fun allMeta(): List<Meta>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(t: Task)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putAll(t: List<Task>)
@@ -209,7 +212,7 @@ interface Store {
     @Query("DELETE FROM goal_logs") suspend fun clearLogs()
 }
 
-@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class, Event::class], version = 4, exportSchema = false)
+@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class, Event::class], version = 5, exportSchema = false)
 abstract class PlannerDb : RoomDatabase() {
     abstract fun store(): Store
 }
@@ -245,6 +248,12 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE tasks ADD COLUMN period TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE tasks ADD COLUMN details TEXT NOT NULL DEFAULT ''")
     }
 }
 
@@ -336,6 +345,8 @@ data class Settings(
     val morningNote: Boolean = true,
     /** Notification when a period ends with tasks left. */
     val periodNote: Boolean = true,
+    /** series -> ward of the Quran app it opens. */
+    val quranLinks: Map<String, QuranLink> = emptyMap(),
 ) {
     fun alarmBefore(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(0)?.toIntOrNull() ?: 0
     fun alarmAtAdhan(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(1) == "1"
@@ -392,7 +403,7 @@ data class Settings(
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
             "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle", "swipeAction",
             "dayMode", "prayers", "prayerBefore", "prayerAfter", "prayerOffsets", "groupPeriods", "places", "fajrNap",
-            "prayerAlarms", "morningNote", "periodNote")
+            "prayerAlarms", "morningNote", "periodNote", "quranLinks")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -415,10 +426,17 @@ data class Settings(
                 fajrNap = i("fajrNap", 0),
                 prayerAlarms = jsonMap(m["prayerAlarms"]) { it },
                 morningNote = m["morningNote"] != "0", periodNote = m["periodNote"] != "0",
+                quranLinks = parseLinks(m["quranLinks"]),
             ).also { Cat.groups = it.groups }
         }
     }
 }
+
+fun parseLinks(text: String?): Map<String, QuranLink> =
+    if (text.isNullOrBlank()) emptyMap() else runCatching {
+        val o = JSONObject(text)
+        o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let { QuranLink(it.optString("mode", "read"), it.getString("ward"), it.optString("name"), it.optBoolean("missing")) } }
+    }.getOrDefault(emptyMap())
 
 fun <T> jsonMap(text: String?, conv: (String) -> T): Map<String, T> =
     if (text.isNullOrBlank()) emptyMap() else runCatching { JSONObject(text).let { o -> o.keys().asSequence().associateWith { conv(o.get(it).toString()) } } }.getOrDefault(emptyMap())
@@ -618,7 +636,7 @@ fun itemOf(t: Task, rules: Map<String, Rule>, s: Settings, nowMs: Long?, nowMin:
 // ---------------- Repository ----------------
 
 class Repository(private val context: Context) {
-    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
     val store: Store = db.store()
     private val lock = Mutex()
 
@@ -940,6 +958,151 @@ class Repository(private val context: Context) {
 
     suspend fun replan() = lock.withLock { replanLocked() }
 
+    // ---------- details, planning, pomodoro, Quran ----------
+
+    suspend fun setDetails(id: String, text: String) = lock.withLock {
+        val t = store.task(id) ?: return@withLock
+        store.put(t.copy(details = text.trim()))
+    }
+
+    suspend fun setTarget(key: String, series: String, t: Target) = lock.withLock {
+        val all = Targets.put(Targets.parse(store.meta("targets")), key, series, t)
+        store.put(Meta("targets", Targets.encode(all)))
+    }
+
+    /** After finishing a task: how much of its day target was done. */
+    suspend fun addTargetDone(day: String, series: String, n: Int) = lock.withLock {
+        val all = Targets.parse(store.meta("targets"))
+        val key = "d:$day"
+        val cur = all[key]?.get(series) ?: Target()
+        store.put(Meta("targets", Targets.encode(Targets.put(all, key, series, cur.copy(done = (cur.done + n).coerceAtLeast(0))))))
+    }
+
+    /** Creates the day's tasks and proposes a period for each one that has none (the user can move them). */
+    suspend fun prepareDay(day: LocalDate) = lock.withLock {
+        ensureDayLocked(day)
+        val s = settingsLocked()
+        val ds = day.toString()
+        if (day != Clock.today() && s.prayerMode && store.meta("dayPlanned:$ds") == null) {
+            val rules = store.allRules().associateBy { it.id }
+            val tasks = store.tasksOn(ds).filter { it.open }
+            val plan = Scheduler.plan(tasks.map { itemOf(it, rules, s, null, null, day) }, s.configFor(day), s.dayStart)
+            store.putAll(tasks.filter { it.period.isEmpty() }.mapNotNull { t ->
+                val p = plan.placed[t.id]?.takeIf { !it.overflow } ?: return@mapNotNull null
+                t.copy(period = s.periodAt(day, p.start))
+            })
+        }
+        replanLocked()
+    }
+
+    /** Puts a task in a period ("" = back to the list of tasks not placed yet). */
+    suspend fun assignPeriod(id: String, key: String) = lock.withLock {
+        val t = store.task(id) ?: return@withLock
+        val s = settingsLocked()
+        val day = LocalDate.parse(t.day)
+        val start = s.periodsOn(day).firstOrNull { it.key == key }?.start
+        val nowMin = if (day == Clock.today()) Clock.minuteOfDay(System.currentTimeMillis()) else 0
+        store.put(t.copy(period = key, pinned = false, preferMin = start?.let { maxOf(it + s.prayerAfter, nowMin) } ?: -1))
+        replanLocked()
+    }
+
+    /** The day is planned: what was left in the list (and is not routine) goes to the next day. */
+    suspend fun confirmDayPlan(day: LocalDate): Int = lock.withLock {
+        val s = settingsLocked()
+        val rules = store.allRules().associateBy { it.id }
+        val left = store.tasksOn(day.toString()).filter { it.open && !it.running && it.spent == 0L && it.period.isEmpty() && !isRoutine(it, rules, s) }
+        left.forEach { endTaskLocked(it, "carry", "ما انحطت بخطة اليوم") }
+        store.put(Meta("dayPlanned:$day", "1"))
+        replanLocked()
+        left.size
+    }
+
+    /** Pomodoro: a 25-minute timer that is not one of the day's tasks. State: "end" while running, "left" while paused. */
+    suspend fun pomo(action: String) = lock.withLock {
+        val now = System.currentTimeMillis()
+        val st = JSONObject(store.meta("pomo")?.takeIf { it.isNotBlank() } ?: "{}")
+        val end = st.optLong("end"); val left = st.optLong("left", POMO_MS)
+        when (action) {
+            "start" -> if (end == 0L) { st.put("end", now + left).put("startedAt", if (left == POMO_MS) now else st.optLong("startedAt", now)) }
+            "pause" -> if (end > 0) { st.put("left", (end - now).coerceAtLeast(0)).put("end", 0L) }
+            "reset" -> {
+                val used = POMO_MS - (if (end > 0) end - now else left)
+                if (used >= 5 * 60_000L) addPomoLocked(st.optLong("startedAt", now), (used / 60_000).toInt())
+                st.put("end", 0L).put("left", POMO_MS)
+            }
+        }
+        store.put(Meta("pomo", st.toString()))
+        Alarms.pomoAlarm(context, st.optLong("end"))
+    }
+
+    /** Called when the pomodoro time is over (alarm or app opened). */
+    suspend fun pomoCheck() = lock.withLock {
+        val st = JSONObject(store.meta("pomo")?.takeIf { it.isNotBlank() } ?: return@withLock)
+        val end = st.optLong("end")
+        if (end == 0L || end > System.currentTimeMillis()) return@withLock
+        addPomoLocked(st.optLong("startedAt", end - POMO_MS), (POMO_MS / 60_000).toInt())
+        store.put(Meta("pomo", st.put("end", 0L).put("left", POMO_MS).toString()))
+    }
+
+    private suspend fun addPomoLocked(startedAt: Long, minutes: Int) {
+        val day = Clock.dayOf(startedAt).toString()
+        val a = org.json.JSONArray(store.meta("pomo:$day")?.takeIf { it.isNotBlank() } ?: "[]")
+        a.put(JSONObject().put("at", startedAt).put("min", minutes).put("label", ""))
+        store.put(Meta("pomo:$day", a.toString()))
+    }
+
+    suspend fun pomoLabel(day: String, index: Int, label: String) = lock.withLock {
+        val a = org.json.JSONArray(store.meta("pomo:$day")?.takeIf { it.isNotBlank() } ?: return@withLock)
+        if (index in 0 until a.length()) a.getJSONObject(index).put("label", label.trim())
+        store.put(Meta("pomo:$day", a.toString()))
+    }
+
+    suspend fun setQuranLink(series: String, link: QuranLink?) = lock.withLock {
+        val o = JSONObject(store.meta("quranLinks")?.takeIf { it.isNotBlank() } ?: "{}")
+        if (link == null) o.remove(series) else o.put(series, JSONObject().put("mode", link.mode).put("ward", link.wardId).put("name", link.wardName))
+        store.put(Meta("quranLinks", o.toString()))
+    }
+
+    /**
+     * Pulls today's report from the Quran app. The newest report replaces the stored one (never added on top),
+     * so syncing again never doubles anything. Ward names are refreshed so a renamed ward keeps its link.
+     */
+    suspend fun syncQuran(): QuranState {
+        val today = Clock.today().toString()
+        val (st, rep) = QuranAdapter.report(context, today)
+        val wards = if (st == QuranState.OK) QuranAdapter.wards(context) else st to emptyList()
+        lock.withLock {
+            store.put(Meta("quranState", st.name))
+            if (rep != null) {
+                val old = store.meta("quran:$today")?.let { runCatching { QuranAdapter.parseReport(JSONObject(it), 0) }.getOrNull() }
+                if (old == null || rep.version >= old.version) store.put(Meta("quran:$today", reportJson(rep)))
+                store.put(Meta("quranSyncAt", System.currentTimeMillis().toString()))
+            }
+            if (wards.first == QuranState.OK && wards.second.isNotEmpty()) {
+                val o = JSONObject(store.meta("quranLinks")?.takeIf { it.isNotBlank() } ?: "{}")
+                var changed = false
+                for (k in o.keys().asSequence().toList()) {
+                    val l = o.getJSONObject(k)
+                    val w = wards.second.firstOrNull { it.id == l.getString("ward") }
+                    if (w != null && w.name != l.optString("name")) { l.put("name", w.name); changed = true }
+                    if (w == null && !l.optBoolean("missing")) { l.put("missing", true); changed = true }
+                    if (w != null && l.optBoolean("missing")) { l.remove("missing"); changed = true }
+                }
+                if (changed) store.put(Meta("quranLinks", o.toString()))
+            }
+        }
+        return st
+    }
+
+    private fun reportJson(r: QuranReport): String {
+        fun t(x: QuranTotals) = JSONObject().put("read_ayahs", x.readAyahs).put("read_pages", x.readPages).put("memorized_ayahs", x.memorizedAyahs)
+            .put("review_ayahs", x.reviewAyahs).put("review_plays", x.reviewPlays).put("listen_seconds", x.listenSeconds)
+        val a = org.json.JSONArray()
+        r.wards.forEach { w -> a.put(JSONObject().put("ward_id", w.wardId).put("name", w.name).put("mode", w.mode).put("totals", t(w.totals))) }
+        return JSONObject().put("day", r.day).put("report_version", r.version).put("generated_at", r.generatedAt)
+            .put("synced_at", r.syncedAt).put("totals", t(r.totals)).put("wards", a).toString()
+    }
+
     suspend fun refreshWidget() = lock.withLock {
         PlannerWidget.update(context, store.tasksOn(Clock.today().toString()), settingsLocked())
     }
@@ -1066,8 +1229,10 @@ class Repository(private val context: Context) {
             )
         }
         // Prayer mode: each task of today gets its period once and keeps it, done or not.
+        val byHand = store.meta("dayPlanned:$ts") != null
         val final = if (!s.prayerMode) updated else updated.map { t ->
             if (t.day != ts || t.period.isNotEmpty() || !t.open) return@map t
+            if (byHand && !isRoutine(t, rules, s) && !t.running && t.spent == 0L) return@map t
             val place = s.placeOf(t)
             val key = when {
                 place != null && place.startsWith("p:") -> place.removePrefix("p:")
@@ -1530,7 +1695,7 @@ class Repository(private val context: Context) {
                     .put("sets", t.sets).put("workSec", t.workSec).put("restSec", t.restSec).put("created", t.created)
                     .put("finishedAt", t.finishedAt).put("category", t.category).put("sport", t.sport).put("phase", t.phase)
                     .put("phaseCount", t.phaseCount).put("pct", t.pct).put("units", t.units).put("doneUnits", t.doneUnits).put("note", t.note)
-                    .put("atWork", t.atWork).put("preferMin", t.preferMin).put("period", t.period)
+                    .put("atWork", t.atWork).put("preferMin", t.preferMin).put("period", t.period).put("details", t.details)
             )
         }
         val goals = JSONArray()
@@ -1558,7 +1723,8 @@ class Repository(private val context: Context) {
         val logs = JSONArray()
         store.allLogs().forEach { l -> logs.put(JSONObject().put("id", l.id).put("goalId", l.goalId).put("day", l.day).put("value", l.value)) }
         val meta = JSONObject()
-        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
+        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
+        store.allMeta().filter { it.key.startsWith("pomo:") || it.key.startsWith("dayPlanned:") || it.key.startsWith("quran:") }.forEach { meta.put(it.key, it.value) }
         val events = JSONArray()
         store.allEvents().forEach { e ->
             events.put(JSONObject().put("id", e.id).put("taskId", e.taskId ?: JSONObject.NULL).put("series", e.series).put("day", e.day)
@@ -1606,7 +1772,7 @@ class Repository(private val context: Context) {
                         finishedAt = o.optLong("finishedAt"), category = o.optString("category", "other"),
                         sport = o.optInt("sport"), phase = o.optInt("phase"), phaseCount = o.optInt("phaseCount", 1),
                         pct = o.optInt("pct", 100), units = o.optInt("units"), doneUnits = o.optInt("doneUnits"), note = o.optString("note"),
-                        atWork = o.optBoolean("atWork"), preferMin = o.optInt("preferMin", -1), period = o.optString("period"),
+                        atWork = o.optBoolean("atWork"), preferMin = o.optInt("preferMin", -1), period = o.optString("period"), details = o.optString("details"),
                     )
                 )
             }
@@ -1667,6 +1833,7 @@ class Repository(private val context: Context) {
     }
 
     companion object {
+        const val POMO_MS = 25 * 60_000L
         @Volatile private var instance: Repository? = null
         fun get(context: Context): Repository =
             instance ?: synchronized(this) { instance ?: Repository(context.applicationContext).also { instance = it } }

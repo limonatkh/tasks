@@ -31,7 +31,10 @@ object Alarms {
 
     /** [kind]: task | prayer (rings like an alarm) | note (plain notification) | period (period ended, with actions). */
     data class Event(val at: Long, val title: String, val text: String, val taskId: String?, val canStart: Boolean, val silent: Boolean = false, val close: Boolean = false,
-                     val kind: String = "task", val period: String = "")
+                     val kind: String = "task", val period: String = "", val open: String = "")
+
+    /** Every ringing alarm stops by itself after this long; there is no endless ringing. */
+    const val RING_LIMIT_MS = 90_000L
 
     const val PRAYER_CHANNEL = "planner_prayer_v1"
     const val NOTE_CHANNEL = "planner_note_v1"
@@ -162,7 +165,8 @@ object Alarms {
                 .putExtra("start", e.canStart).putExtra("silent", e.silent).putExtra("id", BASE_CODE + i).putExtra("close", e.close)
                 .putExtra("day", Clock.today().toString())
                 .putExtra("insistent", settings.insistent)
-                .putExtra("kind", e.kind).putExtra("period", e.period)
+                .putExtra("kind", e.kind).putExtra("period", e.period).putExtra("open", e.open)
+                .putExtra("quran", e.taskId != null && tasks.firstOrNull { it.id == e.taskId }?.let { settings.quranLinks.containsKey(seriesOf(it)) } == true)
             val pi = PendingIntent.getBroadcast(context, BASE_CODE + i, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             try {
                 if (canExact(context)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, e.at, pi)
@@ -201,6 +205,11 @@ object Alarms {
                 if (s.alarmAtAdhan(k)) out += Event(at, "حان وقت صلاة $name", fmt12(p.at(k)), null, false, kind = "prayer")
             }
         }
+        // Planning prompts: the month on its first day, the week on Friday at fajr, the next day before sleep.
+        val p0 = s.prayersOn(today)
+        if (today.dayOfMonth == 1) out += Event(Clock.epoch(today, s.dayStart), "أول الشهر: خطط أسابيعه", "حدد هدف كل أسبوع لكل مهمة", null, false, kind = "note", open = "month")
+        if (today.dayOfWeek == java.time.DayOfWeek.FRIDAY) out += Event(Clock.epoch(today, p0.fajr + 20), "أول الأسبوع: وزّع أهدافه على الأيام", "خطة الأسبوع", null, false, kind = "note", open = "week")
+        out += Event(Clock.epoch(today, s.dayEnd - 30), "رتّب مهام بكرا", "اسحب المهام لفترات بكرا", null, false, kind = "note", open = "day")
         if (!s.prayerMode) return out
         val periods = s.periodsOn(today)
         if (s.morningNote) {
@@ -216,6 +225,34 @@ object Alarms {
         return out
     }
 
+    fun pomoAlarm(context: Context, end: Long) {
+        val am = context.getSystemService(AlarmManager::class.java)
+        val intent = Intent(context, AlarmReceiver::class.java).putExtra("kind", "pomo").putExtra("id", POMO_ID)
+            .putExtra("title", "انتهى البومودورو").putExtra("text", "٢٥ دقيقة خلصت")
+        val pi = PendingIntent.getBroadcast(context, POMO_ID, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        am.cancel(pi)
+        if (end <= System.currentTimeMillis()) return
+        try {
+            if (canExact(context)) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, end, pi) else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, end, pi)
+        } catch (_: SecurityException) { am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, end, pi) }
+    }
+
+    private const val POMO_ID = 4900
+
+    /** Opens the app on a page (month / week / day planning). */
+    fun openPage(context: Context, page: String): PendingIntent = PendingIntent.getActivity(
+        context, 100 + page.hashCode().and(0xff), Intent(context, MainActivity::class.java).putExtra("open", page)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    /** Starts a task linked to a Quran ward: the app starts the timer and opens the ward (only when the user taps). */
+    fun startQuranTask(context: Context, taskId: String, id: Int): PendingIntent = PendingIntent.getActivity(
+        context, 200 + id, Intent(context, MainActivity::class.java).putExtra("startQuran", taskId).putExtra("notification", id)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
     fun prayerRing(context: Context, id: Int, title: String, text: String) {
         channels(context)
         val n = NotificationCompat.Builder(context, PRAYER_CHANNEL)
@@ -223,17 +260,18 @@ object Alarms {
             .setPriority(NotificationCompat.PRIORITY_MAX).setCategory(NotificationCompat.CATEGORY_ALARM)
             .setAutoCancel(true).setContentIntent(openApp(context)).setFullScreenIntent(openApp(context), true)
             .addAction(0, "إيقاف", ActionReceiver.intent(context, ActionReceiver.DISMISS, null, id))
+            .setTimeoutAfter(RING_LIMIT_MS)
             .build()
         n.flags = n.flags or Notification.FLAG_INSISTENT
         try { NotificationManagerCompat.from(context).notify(id, n) } catch (_: SecurityException) {}
     }
 
-    fun note(context: Context, id: Int, title: String, text: String, period: String) {
+    fun note(context: Context, id: Int, title: String, text: String, period: String, open: String = "") {
         channels(context)
         val b = NotificationCompat.Builder(context, NOTE_CHANNEL)
             .setSmallIcon(R.drawable.ic_stat).setContentTitle(title).setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setAutoCancel(true).setContentIntent(openApp(context))
+            .setAutoCancel(true).setContentIntent(if (open.isNotEmpty()) openPage(context, open) else openApp(context))
         if (period.isNotEmpty()) {
             b.addAction(0, "للفترة الجاية", ActionReceiver.intent(context, ActionReceiver.PERIOD_NEXT, period, id))
             b.addAction(0, "لبكرا", ActionReceiver.intent(context, ActionReceiver.PERIOD_TOMORROW, period, id))
@@ -283,7 +321,7 @@ object Alarms {
 
     private const val CLOSE_ID = 4
 
-    fun ring(context: Context, id: Int, title: String, text: String, taskId: String?, canStart: Boolean, insistent: Boolean) {
+    fun ring(context: Context, id: Int, title: String, text: String, taskId: String?, canStart: Boolean, quran: Boolean = false) {
         channels(context)
         val b = NotificationCompat.Builder(context, alarmChannel(context))
             .setSmallIcon(R.drawable.ic_stat)
@@ -295,9 +333,12 @@ object Alarms {
             .setContentIntent(openApp(context))
             .setFullScreenIntent(openApp(context), true)
             .addAction(0, "إيقاف", ActionReceiver.intent(context, ActionReceiver.DISMISS, taskId, id))
-        if (canStart && taskId != null) b.addAction(0, "بدء", ActionReceiver.intent(context, ActionReceiver.START, taskId, id))
+        if (canStart && taskId != null) b.addAction(0, "بدء", if (quran) startQuranTask(context, taskId, id) else ActionReceiver.intent(context, ActionReceiver.START, taskId, id))
+        if (quran && taskId != null) b.setContentIntent(startQuranTask(context, taskId, id))
+        b.setTimeoutAfter(RING_LIMIT_MS)
         val n = b.build()
-        if (insistent) n.flags = n.flags or Notification.FLAG_INSISTENT
+        // Rings and vibrates again and again, but the timeout above always stops it after a minute and a half.
+        n.flags = n.flags or Notification.FLAG_INSISTENT
         try { NotificationManagerCompat.from(context).notify(id, n) } catch (_: SecurityException) {}
     }
 }
@@ -319,11 +360,17 @@ class AlarmReceiver : BroadcastReceiver() {
         }
         when (intent.getStringExtra("kind")) {
             "prayer" -> { Alarms.prayerRing(context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: ""); return }
-            "note", "period" -> { Alarms.note(context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: "", intent.getStringExtra("period") ?: ""); return }
+            "note", "period" -> { Alarms.note(context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: "", intent.getStringExtra("period") ?: "", intent.getStringExtra("open") ?: ""); return }
+            "pomo" -> {
+                Alarms.prayerRing(context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: "")
+                val pending = goAsync()
+                Alarms.scope.launch { try { Repository.get(context).pomoCheck() } finally { pending.finish() } }
+                return
+            }
         }
         Alarms.ring(
             context, intent.getIntExtra("id", 2), intent.getStringExtra("title") ?: "", intent.getStringExtra("text") ?: "",
-            intent.getStringExtra("task"), intent.getBooleanExtra("start", false), intent.getBooleanExtra("insistent", true)
+            intent.getStringExtra("task"), intent.getBooleanExtra("start", false), intent.getBooleanExtra("quran", false)
         )
     }
 }

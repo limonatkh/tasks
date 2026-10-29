@@ -125,6 +125,11 @@ fun PlanTab(s: Snapshot, nav: Nav) {
             TextButton(onClick = nav.groups) { Text("المجموعات") }
             TextButton(onClick = nav.newGoal) { Text("+ هدف") }
         }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Secondary("تخطيط الشهر", nav.monthPlan, Modifier.weight(1f))
+            Secondary("خطة الأسبوع", nav.weekPlan, Modifier.weight(1f))
+            Secondary("رتّب بكرا", { nav.dayPlan(s.today.plusDays(1)) }, Modifier.weight(1f))
+        }
         when (mode) {
             0 -> WeekView(s, nav)
             1 -> MonthView(s, nav)

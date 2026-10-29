@@ -10,6 +10,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Reading progress from the separate Quran app (the Quran app defines this permission). -->
+    <uses-permission android:name="ps.imad.quran.permission.INTEGRATION" />
+
+    <queries>
+        <package android:name="ps.imad.quran" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -38,6 +44,12 @@
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info" />
+        </receiver>
+        <!-- Only triggers a pull of the report; the provider read itself is protected by the Quran app's permission. -->
+        <receiver android:name=".QuranProgressReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="ps.imad.quran.action.PROGRESS_CHANGED" />
+            </intent-filter>
         </receiver>
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
