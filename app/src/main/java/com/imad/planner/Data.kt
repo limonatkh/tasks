@@ -1103,6 +1103,18 @@ class Repository(private val context: Context) {
             .put("synced_at", r.syncedAt).put("totals", t(r.totals)).put("wards", a).toString()
     }
 
+    /**
+     * One session per training (rule and part) on a day. Older versions moved sessions over the sport limit to the
+     * next day again and again, so copies piled up; the extra untouched copies are dropped here.
+     * A session the user chose to keep next to tomorrow's own ("keep") is left alone.
+     */
+    private suspend fun dedupeLocked(day: String) {
+        val open = store.tasksOn(day).filter { it.open && !it.running && it.spent == 0L && it.doneUnits == 0 && it.ruleId != null && it.note != "keep" }
+        val drop = open.groupBy { it.ruleId to it.phase }.values.filter { it.size > 1 }
+            .flatMap { g -> g.sortedWith(compareBy({ if (it.period.isNotEmpty() || it.pinned) 0 else 1 }, { it.created })).drop(1) }
+        if (drop.isNotEmpty()) store.putAll(drop.map { it.copy(state = "skipped", note = if (it.note.startsWith("grp:")) it.note else "مكرر") })
+    }
+
     suspend fun refreshWidget() = lock.withLock {
         PlannerWidget.update(context, store.tasksOn(Clock.today().toString()), settingsLocked())
     }
@@ -1209,17 +1221,22 @@ class Repository(private val context: Context) {
         val nowMin = Clock.minuteOfDay(now)
         rollPhasesLocked(today, nowMin, s.shape, now)
         refreshPlanTasksLocked(today, now)
+        val tomorrow = today.plusDays(1).toString()
+        dedupeLocked(ts); dedupeLocked(tomorrow)
+        val tomorrowRules = store.tasksOn(tomorrow).filter { it.open && it.spent == 0L && it.ruleId != null }.mapNotNull { it.ruleId }.toSet()
         val tasks = store.tasksOn(ts)
         val rules = store.allRules().associateBy { it.id }
         val items = tasks.filter { it.open }.map { itemOf(it, rules, s, now, nowMin, today) }
         val plan = Scheduler.plan(items, s.configFor(today), nowMin)
-        val tomorrow = today.plusDays(1).toString()
         val updated = tasks.map { t ->
             val p = plan.placed[t.id] ?: return@map t.copy(parallelTo = null, overflow = false)
             val inProgress = t.running || t.spent > 0 || t.doneUnits > 0
             if (t.id in plan.capped && !t.pinned && !inProgress) {
-                // Over today's sport limit: it moves to tomorrow and its series shifts with it.
-                return@map t.copy(day = tomorrow, planned = 0, parallelTo = null, overflow = false)
+                // Over today's sport limit: it moves to tomorrow and its series shifts with it,
+                // unless tomorrow already has a session of the same training (then it is not piled up a second time).
+                if (t.ruleId != null && t.ruleId in tomorrowRules)
+                    return@map t.copy(state = "skipped", note = if (t.note.startsWith("grp:")) t.note else "فوق حد التمارين", parallelTo = null, overflow = false)
+                return@map t.copy(day = tomorrow, planned = 0, parallelTo = null, overflow = false, period = "")
             }
             val start = if (t.pinned && !t.running && t.spent == 0L) t.planned else Clock.epoch(today, p.start)
             t.copy(
@@ -1455,7 +1472,8 @@ class Repository(private val context: Context) {
             log(t, "postpone", listOf("دمج مع جلسة بكرا (+${left} د)", reason).filter { it.isNotBlank() }.joinToString(" · "))
             if (r.weekdays == 0) store.put(r.copy(lastDoneDay = maxOf(t.day, r.lastDoneDay ?: "")))
         } else {
-            store.put(t.copy(day = ts, planned = if (t.pinned) Clock.epoch(tomorrow, Clock.minuteOfDay(t.planned)) else 0, preferMin = -1, period = ""))
+            store.put(t.copy(day = ts, planned = if (t.pinned) Clock.epoch(tomorrow, Clock.minuteOfDay(t.planned)) else 0, preferMin = -1, period = "",
+                note = if (t.note.isEmpty()) "keep" else t.note))
             log(t, "postpone", listOf("لبكرا مع جلسة بكرا", reason).filter { it.isNotBlank() }.joinToString(" · "))
             if (r.weekdays == 0) store.put(r.copy(lastDoneDay = maxOf(t0.day, r.lastDoneDay ?: "")))
         }

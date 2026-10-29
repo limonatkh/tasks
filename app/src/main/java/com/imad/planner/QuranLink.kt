@@ -149,11 +149,19 @@ object QuranAdapter {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     /** Opens the ward; returns the reason when it cannot. */
+    /**
+     * The occurrence: task, day and the time it was set for, so two reminders of one task on the same day differ.
+     * The Quran app treats it as opaque text.
+     */
+    fun occurrenceOf(t: Task): String = "${t.id}@${t.day}" + if (t.planned > 0) "@" + "%04d".format(Clock.minuteOfDay(t.planned)) else ""
+
     fun open(context: Context, link: QuranLink, t: Task): QuranState {
         if (!installed(context)) return QuranState.NOT_INSTALLED
-        val i = openIntent(link, t.id, "${t.id}@${t.day}")
+        // The Quran app protects the open screen with the same permission as its data.
+        if (permissionDefined(context) && !hasPermission(context)) return QuranState.NO_PERMISSION
+        val i = openIntent(link, t.id, occurrenceOf(t))
         if (context.packageManager.queryIntentActivities(i, 0).isEmpty()) return QuranState.NOT_SUPPORTED
-        return try { context.startActivity(i); QuranState.OK } catch (_: Exception) { QuranState.ERROR }
+        return try { context.startActivity(i); QuranState.OK } catch (_: SecurityException) { QuranState.NO_PERMISSION } catch (_: Exception) { QuranState.ERROR }
     }
 
     /** Main number of a ward report for its activity, with its unit. */

@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.imad.planner
 
@@ -10,6 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -349,12 +352,14 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
         val routine = isRoutine(t, rules, s.settings)
         val look = s.settings.icons[seriesOf(t)]
         val target = s.targets[Targets.dayKey(day)]?.get(seriesOf(t))
+        var handleOrigin by remember { mutableStateOf(Offset.Zero) }
         Row(
             Modifier.fillMaxWidth()
                 .background(if (picked?.id == t.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
                 .border(if (t.done) 2.dp else 1.dp, if (t.done) Status.done else tag ?: MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
                 .onGloballyPositioned { chipOrigin = it.positionInRoot() }
                 .then(if (routine) Modifier else Modifier.pointerInput(t.id, t.period) {
+                    // Hold anywhere on the task, then drag (a quick swipe scrolls the list instead).
                     detectDragGesturesAfterLongPress(
                         onDragStart = { off -> dragging = t; dragPos = chipOrigin + off; picked = null },
                         onDrag = { change, amount -> change.consume(); dragPos += amount },
@@ -362,10 +367,25 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                         onDragCancel = { dragging = null },
                     )
                 })
-                .clickable(enabled = !routine) { picked = if (picked?.id == t.id) null else t }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .combinedClickable(enabled = !routine, onClick = { picked = if (picked?.id == t.id) null else t }, onDoubleClick = { details(t) })
+                .padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // The handle drags right away, without holding first.
+            if (!routine) Box(
+                Modifier.width(26.dp).height(36.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp))
+                    .onGloballyPositioned { handleOrigin = it.positionInRoot() }
+                    .pointerInput(t.id, t.period) {
+                        detectDragGestures(
+                            onDragStart = { off -> dragging = t; dragPos = handleOrigin + off; picked = null },
+                            onDrag = { change, amount -> change.consume(); dragPos += amount },
+                            onDragEnd = { dragging?.let { drop(it, dragPos) }; dragging = null },
+                            onDragCancel = { dragging = null },
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) { Text("⠿", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             if (look != null) TaskBadge(look, tag, 22.dp)
             Column(Modifier.weight(1f)) {
                 Text(if (look != null && s.settings.nameStyle == "icon") t.title.take(12) else t.title, fontSize = 14.sp, maxLines = 2,
@@ -442,7 +462,8 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                 }
                 dragging?.let { t ->
                     Box(
-                        Modifier.offset { IntOffset((dragPos.x - origin.x - 120).roundToInt(), (dragPos.y - origin.y - 30).roundToInt()) }
+                        // Screen coordinates are not mirrored, so the offset must not be either (the page is right-to-left).
+                        Modifier.absoluteOffset { IntOffset((dragPos.x - origin.x - 60.dp.toPx()).roundToInt(), (dragPos.y - origin.y - 24.dp.toPx()).roundToInt()) }
                             .width(170.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)).padding(10.dp)
                     ) { Text(t.title, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1) }
                 }

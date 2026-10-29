@@ -314,16 +314,32 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         }
     }
 
+    val quranPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) act { repo.syncQuran(); snackbar.showSnackbar("انسمح الربط. ابدأ المهمة مرة ثانية.") }
+    }
+    /**
+     * Starting a task linked to a ward opens the ward first. If the Quran app cannot open it, the timer does not start
+     * (the planner owns its timer) and the reason is shown, with a way to start without the Quran app.
+     */
     val startTask: (Task, Boolean) -> Unit = { t, viaTimer ->
         act {
-            val wasRunning = repo.store.task(t.id)?.running == true
-            if (viaTimer) repo.timer(t.id) else repo.startNow(t.id)
+            val fresh = repo.store.task(t.id) ?: t
             val link = snap.settings.quranLinks[seriesOf(t)]
-            if (link != null && !wasRunning) {
-                if (link.missing) snackbar.showSnackbar("الورد المرتبط انحذف من تطبيق القرآن، اختار ورد ثاني")
-                else {
-                    val st = QuranAdapter.open(context, link, t)
-                    if (st != QuranState.OK) snackbar.showSnackbar(st.text)
+            val pausing = viaTimer && fresh.running
+            val begin: suspend () -> Unit = { if (viaTimer) repo.timer(t.id) else repo.startNow(t.id) }
+            if (link == null || pausing) begin()
+            else {
+                val st = if (link.missing) null else QuranAdapter.open(context, link, fresh)
+                when (st) {
+                    QuranState.OK -> begin()
+                    QuranState.NO_PERMISSION -> {
+                        if (snackbar.showSnackbar(st.text, actionLabel = "السماح", withDismissAction = true) == SnackbarResult.ActionPerformed)
+                            quranPermission.launch(QuranContract.PERMISSION)
+                    }
+                    else -> {
+                        val msg = st?.text ?: "الورد المرتبط انحذف من تطبيق القرآن، اختار ورد ثاني من تفاصيل المهمة."
+                        if (snackbar.showSnackbar(msg, actionLabel = "ابدأ بدون القرآن", withDismissAction = true) == SnackbarResult.ActionPerformed) begin()
+                    }
                 }
             }
         }
@@ -590,7 +606,7 @@ fun UndoRow(s: Snapshot, nav: Nav) {
 @Composable
 fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, askClose: () -> Unit, closeDay: (String) -> Unit, goTomorrow: () -> Unit) {
     val ts = s.today.toString()
-    val all = s.tasks.filter { it.day == ts && !(it.state == "skipped" && it.note == "اندمجت مع جلسة بكرا") }
+    val all = s.tasks.filter { it.day == ts && !(it.state == "skipped" && it.note in setOf("اندمجت مع جلسة بكرا", "مكرر", "فوق حد التمارين")) }
         .sortedWith(compareBy({ !it.running }, { if (it.planned == 0L) Long.MAX_VALUE else it.planned }, { it.created }))
     val todays = all.filter { it.state != "skipped" }
     val minute = Clock.minuteOfDay(s.now)
