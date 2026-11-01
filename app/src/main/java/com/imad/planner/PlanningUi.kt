@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -621,31 +622,47 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
             dragging?.let { d -> drop(d, touchStart + dragDelta); haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove) }
             dragging = null
         }
+        var lastTapUp by remember { mutableStateOf(0L) }
+        var pressOff by remember { mutableStateOf(false) }
         Box(
             Modifier.fillMaxWidth()
                 .onGloballyPositioned { chipOrigin = it.positionInRoot(); chipSize = it.size }
                 // While it is being moved, its place stays as a faint outline.
                 .graphicsLayer { alpha = if (dragging?.id == t.id) 0.2f else 1f }
+                .pointerInput(t.id, routine) {
+                    // Tap: pick (or "routine is fixed"). Double tap: details. Double tap and hold the second tap 0.7 s: routine on/off.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val up = waitForUpOrCancellation() ?: return@awaitEachGesture
+                        if ((up.position - down.position).getDistance() > viewConfiguration.touchSlop) return@awaitEachGesture
+                        lastTapUp = System.currentTimeMillis()
+                        val second = withTimeoutOrNull(350) { awaitFirstDown(requireUnconsumed = false) }
+                        if (second == null) {
+                            if (routine) locked = t else picked = if (picked?.id == t.id) null else t
+                            return@awaitEachGesture
+                        }
+                        lastTapUp = System.currentTimeMillis()
+                        val up2 = withTimeoutOrNull(700) { waitForUpOrCancellation() }
+                        if (up2 == null) {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            dragging = null
+                            askRoutine = t
+                            waitForUpOrCancellation()
+                        } else details(t)
+                    }
+                }
                 .then(
-                    if (routine) Modifier.pointerInput(t.id) {
-                        // Routine tasks stay where they are; say so instead of doing nothing.
-                        detectTapGestures(
-                            onTap = { locked = t },
-                            onLongPress = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); askRoutine = t },
-                        )
-                    } else Modifier
+                    if (routine) Modifier else Modifier
                         .pointerInput(t.id, t.period) {
-                            // Hold anywhere on the box, then move it.
+                            // Hold anywhere on the box, then move it (not when the hold is the second tap of a double tap).
                             detectDragGesturesAfterLongPress(
-                                onDragStart = { off -> if (!byHandle) begin(off) },
-                                onDrag = { change, amount -> if (!byHandle) { change.consume(); dragDelta += amount } },
-                                onDragEnd = {
-                                    if (!byHandle) {
-                                        // Held without moving: ask about routine instead of moving it.
-                                        if (dragDelta.getDistance() < 24f) { dragging = null; askRoutine = t } else end()
-                                    }
+                                onDragStart = { off ->
+                                    pressOff = byHandle || System.currentTimeMillis() - lastTapUp < 500
+                                    if (!pressOff) begin(off)
                                 },
-                                onDragCancel = { if (!byHandle) dragging = null },
+                                onDrag = { change, amount -> if (!pressOff && !byHandle) { change.consume(); dragDelta += amount } },
+                                onDragEnd = { if (!pressOff && !byHandle) end(); pressOff = false },
+                                onDragCancel = { if (!pressOff && !byHandle) dragging = null; pressOff = false },
                             )
                         }
                         .pointerInput(t.id, t.period, "handle") {
@@ -671,7 +688,6 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                                 byHandle = false
                             }
                         }
-                        .combinedClickable(onClick = { picked = if (picked?.id == t.id) null else t }, onDoubleClick = { details(t) })
                 ),
         ) { chipBody(t, ghost = false) }
     }
@@ -683,7 +699,7 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("ترتيب ${if (day == s.today) "اليوم" else if (day == s.today.plusDays(1)) "بكرا" else dayLabel(day)}", style = MaterialTheme.typography.titleLarge)
-                            Muted("اسحب من ⠿ لفترة. ضغطة طويلة بدون تحريك: روتين أو لا. 🔒 روتين ثابت.")
+                            Muted("اسحب من ⠿ لفترة. كبستين: التفاصيل. كبستين ومسك الثانية: روتين أو لا. 🔒 روتين ثابت.")
                         }
                         IconButton(onClick = close) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
                     }
