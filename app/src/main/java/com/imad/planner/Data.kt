@@ -1141,15 +1141,22 @@ class Repository(private val context: Context) {
         ensureDayLocked(day)
         val s = settingsLocked()
         val ds = day.toString()
-        if (day != Clock.today() && s.prayerMode && store.meta("dayPlanned:$ds") == null) {
-            val rules = store.allRules().associateBy { it.id }
+        val rules = store.allRules().associateBy { it.id }
+        if (day != Clock.today() && s.prayerMode && store.meta("dayPlanned:$ds") == null && store.meta("planning:$ds") == null) {
+            // A day planned ahead: only routine tasks get a period; everything else waits in the list for the user.
             val tasks = store.tasksOn(ds).filter { it.open }
-            val plan = Scheduler.plan(tasks.map { itemOf(it, rules, s, null, null, day) }, s.configFor(day), s.dayStart)
-            store.putAll(tasks.filter { it.period.isEmpty() }.mapNotNull { t ->
-                val p = plan.placed[t.id]?.takeIf { !it.overflow } ?: return@mapNotNull null
-                t.copy(period = s.periodAt(day, p.start))
+            val routine = tasks.filter { isRoutine(it, rules, s) }
+            val plan = Scheduler.plan(routine.map { itemOf(it, rules, s, null, null, day) }, s.configFor(day), s.dayStart)
+            store.putAll(tasks.mapNotNull { t ->
+                when {
+                    !isRoutine(t, rules, s) && !t.pinned && t.spent == 0L -> if (t.period.isNotEmpty()) t.copy(period = "") else null
+                    t.period.isEmpty() -> plan.placed[t.id]?.takeIf { !it.overflow }?.let { p -> t.copy(period = s.periodAt(day, p.start)) }
+                    else -> null
+                }
             })
         }
+        // While the user is arranging this day, nothing is put into a period by itself.
+        store.put(Meta("planning:$ds", "1"))
         replanLocked()
     }
 
@@ -1405,7 +1412,7 @@ class Repository(private val context: Context) {
             )
         }
         // Prayer mode: each task of today gets its period once and keeps it, done or not.
-        val byHand = store.meta("dayPlanned:$ts") != null
+        val byHand = store.meta("dayPlanned:$ts") != null || store.meta("planning:$ts") != null
         val final = if (!s.prayerMode) updated else updated.map { t ->
             if (t.day != ts || t.period.isNotEmpty() || !t.open) return@map t
             if (byHand && !isRoutine(t, rules, s) && !t.running && t.spent == 0L) return@map t

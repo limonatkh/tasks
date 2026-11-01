@@ -1065,13 +1065,17 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
         val prayer = s.settings.prayerMode
         val groups: List<Pair<Period?, List<Projector.Entry>>> = if (!prayer) listOf(null to shown) else {
             val ps = s.settings.periodsOn(tomorrow)
-            fun keyOf(e: Projector.Entry) = e.task.period.ifEmpty { if (e.task.planned > 0) s.settings.periodAt(tomorrow, Clock.minuteOfDay(e.task.planned)) else "" }
+            // Once tomorrow is being arranged by hand, a task is only in a period if it was put there.
+            val byHand = s.meta["planning:$tomorrow"] != null || s.meta["dayPlanned:$tomorrow"] != null
+            fun keyOf(e: Projector.Entry) = e.task.period.ifEmpty {
+                if (byHand && !e.virtual) "" else if (e.task.planned > 0) s.settings.periodAt(tomorrow, Clock.minuteOfDay(e.task.planned)) else ""
+            }
             ps.map { p -> p to shown.filter { keyOf(it) == p.key } } + listOf(null to shown.filter { keyOf(it).isEmpty() })
         }
         for ((p, list) in groups) {
         if (prayer && (p != null || list.isNotEmpty())) item(key = "tp-" + (p?.key ?: "none")) {
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(p?.name ?: "ما وسعها اليوم", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (p == null) Status.missed else MaterialTheme.colorScheme.primary)
+                Text(p?.name ?: "لسا ما توزّعت", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (p == null) Status.missed else MaterialTheme.colorScheme.primary)
                 if (p != null) Text(fmt12(p.start), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Box(Modifier.weight(1f))
                 Text("${list.size} · ${durLabel(list.sumOf { it.task.minutes })}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

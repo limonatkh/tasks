@@ -541,7 +541,10 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
     val rules = s.ruleMap
     val periods = s.settings.periodsOn(day)
     val blocks = s.settings.configFor(day).blocks
-    val pool = tasks.filter { it.open && it.period.isEmpty() && !isRoutine(it, rules, s.settings) }
+    // Tasks are kept together by group (in the order of the groups), so related ones sit next to each other.
+    val groupOrder = s.settings.groups.mapIndexed { i, g -> g.key to i }.toMap()
+    val byGroup = compareBy<Task>({ groupOrder[it.category] ?: 99 }, { it.title })
+    val pool = tasks.filter { it.open && it.period.isEmpty() && !isRoutine(it, rules, s.settings) }.sortedWith(byGroup)
     val bounds = remember { mutableStateMapOf<String, Rect>() }
     var dragging by remember { mutableStateOf<Task?>(null) }
     var dragPos by remember { mutableStateOf(Offset.Zero) }
@@ -704,7 +707,7 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                                             Box(Modifier.weight(1f))
                                             Text("${durLabel(used)} / ${durLabel(free)}", fontSize = 12.sp, color = if (over) Status.missed else MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
-                                        inside.forEach { t -> chip(t, true) }
+                                        inside.sortedWith(byGroup).forEach { t -> chip(t, true) }
                                     }
                                 }
                             }
@@ -720,7 +723,14 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                         ) {
                             Text("المهام · ${pool.size}", fontWeight = FontWeight.Bold)
                             if (pool.isEmpty()) Muted("كل المهام انحطت ✓")
-                            pool.forEach { t -> chip(t, false) }
+                            pool.groupBy { it.category }.forEach { (cat, list) ->
+                                val gi = s.settings.groups.indexOfFirst { it.key == cat }.coerceAtLeast(0)
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                                    Box(Modifier.width(4.dp).height(18.dp).background(groupColor(s, cat, gi), RoundedCornerShape(2.dp)))
+                                    Text("  ${Cat.name(cat)} · ${list.size}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                list.forEach { t -> chip(t, false) }
+                            }
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
