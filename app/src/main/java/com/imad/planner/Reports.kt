@@ -52,23 +52,63 @@ fun TextDialog(title: String, hint: String, allowEmpty: Boolean = false, close: 
     )
 }
 
-/** Tap on a task in the day list. */
+/** Everything that can be done with one task, the same menu everywhere. */
+class TaskOps(
+    val start: (() -> Unit)? = null,
+    val finish: (() -> Unit)? = null,
+    val movePeriod: (() -> Unit)? = null,
+    val moveDay: (() -> Unit)? = null,
+    val postpone: (() -> Unit)? = null,
+    val duplicate: (() -> Unit)? = null,
+    val details: (() -> Unit)? = null,
+    val edit: (() -> Unit)? = null,
+    val place: (() -> Unit)? = null,
+    val quran: (() -> Unit)? = null,
+    val report: (() -> Unit)? = null,
+    val note: (() -> Unit)? = null,
+    val close: (() -> Unit)? = null,
+    val delete: (() -> Unit)? = null,
+)
+
 @Composable
-fun TaskMenu(
-    t: Task, close: () -> Unit, startNow: () -> Unit, details: () -> Unit, report: () -> Unit, note: () -> Unit,
-    prayerMode: Boolean = false, movePeriod: () -> Unit = {}, place: () -> Unit = {}, postpone: (() -> Unit)? = null,
-) {
+fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps) {
+    var confirmDelete by remember { mutableStateOf(false) }
     Sheet(t.title, close) {
-        TimeLine(t.planned, t.minutes, end = true)
-        if (t.open && !t.running) Action("ابدأ فيها الآن", startNow, Modifier.fillMaxWidth())
-        if (t.open && !t.running) Muted("المهمة اللي كان وقتها هلأ بتاخد موعد هاي المهمة.")
-        if (prayerMode && t.open) Secondary("نقل لفترة ثانية اليوم", movePeriod, Modifier.fillMaxWidth())
-        if (prayerMode) Secondary("وقتها بالصلوات (دايماً)", place, Modifier.fillMaxWidth())
-        postpone?.let { Secondary("تأجيل لبكرا", it, Modifier.fillMaxWidth()) }
-        Secondary("التفاصيل والتعديل", details, Modifier.fillMaxWidth())
-        Secondary("التقرير", report, Modifier.fillMaxWidth())
-        Secondary("ملاحظة", note, Modifier.fillMaxWidth())
+        if (t.details.isNotBlank()) Muted(t.details)
+        Muted(durLabel(t.minutes) + (Prayer.names[t.period]?.let { " · فترة $it" } ?: "") + if (t.done) " · منجزة ✓" else "")
+        fun go(f: (() -> Unit)?) = { close(); f?.invoke(); Unit }
+        if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ops.start?.takeIf { !t.running }?.let { Action("ابدأ", go(it), Modifier.weight(1f)) }
+            ops.finish?.let { Secondary("أنجزتها ✓", go(it), Modifier.weight(1f)) }
+        }
+        Text("مكانها", style = MaterialTheme.typography.labelLarge)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (t.open) {
+                ops.movePeriod?.let { FilterChip(false, go(it), label = { Text("فترة ثانية") }) }
+                ops.postpone?.let { FilterChip(false, go(it), label = { Text("تأجيل لبكرا") }) }
+                ops.moveDay?.let { FilterChip(false, go(it), label = { Text("ليوم ثاني…") }) }
+                ops.close?.let { FilterChip(false, go(it), label = { Text("إغلاق بدون إنجاز") }) }
+            }
+            ops.place?.let { FilterChip(false, go(it), label = { Text("فترتها دايماً") }) }
+        }
+        Text("المهمة", style = MaterialTheme.typography.labelLarge)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ops.details?.let { FilterChip(false, go(it), label = { Text("تفاصيل") }) }
+            ops.edit?.let { FilterChip(false, go(it), label = { Text("تعديل (مدة، مجموعة، لون، رمز، تكرار)") }) }
+            ops.duplicate?.let { FilterChip(false, go(it), label = { Text("نسخة") }) }
+            ops.quran?.let { FilterChip(false, go(it), label = { Text("ورد القرآن") }) }
+            ops.note?.let { FilterChip(false, go(it), label = { Text("ملاحظة") }) }
+            ops.report?.let { FilterChip(false, go(it), label = { Text("التقرير") }) }
+            ops.delete?.let { FilterChip(false, { confirmDelete = true }, label = { Text("حذف", color = MaterialTheme.colorScheme.error) }) }
+        }
     }
+    if (confirmDelete) AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        title = { Text("حذف «${t.baseTitle}»؟") },
+        text = { Text("بتقدر ترجعها بزر التراجع.") },
+        confirmButton = { TextButton(onClick = { confirmDelete = false; close(); ops.delete?.invoke() }) { Text("حذف") } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("إلغاء") } },
+    )
 }
 
 fun swipeLabel(mode: String) = when (mode) { "close" -> "إغلاق"; "later" -> "لوقت فاضي اليوم"; else -> "ترحيل لبكرا" }

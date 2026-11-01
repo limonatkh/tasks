@@ -601,6 +601,22 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Muted(if (s.prayerMode) "اليوم بينقسم لفترات بين الصلوات، وكل مجموعة إلها فترة (من «المجموعات وأوقاتها»). وقت الصلاة نفسه محجوز. السجل القديم ما بيتغير."
               else "اليوم بيتقسم حسب الساعات فوق (الصباح، الشغل، الرياضة).")
         Secondary("مواقيت الصلاة ومنبهاتها", openPrayers, Modifier.fillMaxWidth())
+        HorizontalDivider()
+        Text("طريقة العرض", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = s.viewStyle == "charts", onClick = { set("viewStyle", "charts") }, label = { Text("رسوم بيانية") })
+            FilterChip(selected = s.viewStyle == "lists", onClick = { set("viewStyle", "lists") }, label = { Text("قوائم") })
+        }
+        listOf("reports" to "التقارير", "week" to "خطة الأسبوع").forEach { (page, name) ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(name, Modifier.weight(1f))
+                listOf("" to "زي العام", "charts" to "رسوم", "lists" to "قوائم").forEach { (v, l) ->
+                    FilterChip(selected = (s.viewPages[page] ?: "") == v, onClick = {
+                        set("viewPages", org.json.JSONObject(s.viewPages.toMap()).apply { if (v.isEmpty()) remove(page) else put(page, v) }.toString())
+                    }, label = { Text(l) })
+                }
+            }
+        }
         if (s.prayerMode) {
             SwitchRow("إشعار الصبح بخطة اليوم", s.morningNote) { set("morningNote", if (it) "1" else "0") }
             SwitchRow("تذكير آخر كل فترة فيها مهام باقية", s.periodNote) { set("periodNote", if (it) "1" else "0") }
@@ -682,7 +698,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.12")
+        Muted("الإصدار 0.13")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

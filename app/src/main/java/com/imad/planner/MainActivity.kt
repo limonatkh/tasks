@@ -238,6 +238,8 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     var monthPlan by remember { mutableStateOf(false) }
     var weekPlan by remember { mutableStateOf(false) }
     var dayPlan by remember { mutableStateOf<LocalDate?>(null) }
+    var chainFor by remember { mutableStateOf<String?>(null) }
+    var moveDayFor by remember { mutableStateOf<Task?>(null) }
     var closeDay by remember { mutableStateOf(false) }
     var restoreText by remember { mutableStateOf<String?>(null) }
     var addMenu by remember { mutableStateOf(false) }
@@ -498,7 +500,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     periodFor?.let { t -> PeriodPicker(snap.settings.periodsOn(today), Clock.minuteOfDay(now), close = { periodFor = null }) { k -> act { repo.moveToPeriod(t.id, k) } } }
     moveFor?.let { t ->
         QuickMoveDialog(t, snap.settings.periodsOn(LocalDate.parse(t.day)), close = { moveFor = null },
-            move = { k -> act { repo.assignPeriod(t.id, k) } }, tomorrow = { postponeFor = t })
+            move = { k -> act { repo.assignPeriod(t.id, k) } }, tomorrow = { postponeFor = t }, more = { menuFor = t })
     }
     detailsFor?.let { t -> DetailsDialog(t, close = { detailsFor = null }) { text -> act { repo.setDetails(t.id, text) } } }
     finishFor?.let { t ->
@@ -508,8 +510,18 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     }
     quranFor?.let { t -> QuranLinkSheet(t, snap.settings.quranLinks[seriesOf(t)], close = { quranFor = null }) { l -> act { repo.setQuranLink(seriesOf(t), l) } } }
     if (pomoOpen) PomodoroSheet(snap, close = { pomoOpen = false }) { a -> act { repo.pomo(a) } }
-    if (monthPlan) MonthPlanSheet(snap, close = { monthPlan = false }) { k, sr, t -> act { repo.setTarget(k, sr, t) } }
-    if (weekPlan) WeekPlanSheet(snap, close = { weekPlan = false }) { k, sr, t -> act { repo.setTarget(k, sr, t) } }
+    if (monthPlan) MonthPlanSheet(snap, close = { monthPlan = false }, chain = { chainFor = it }) { k, sr, t -> act { repo.setTarget(k, sr, t) } }
+    if (weekPlan) WeekPlanSheet(snap, close = { weekPlan = false }, WeekActions(
+        save = { k, sr, t -> act { repo.setTarget(k, sr, t) } },
+        add = { w, sr -> act { repo.addToWeek(w, sr) } },
+        remove = { w, sr -> act { repo.removeFromWeek(w, sr) } },
+        routine = { sr, on -> act { repo.setWeeklyRoutine(sr, on) } },
+        moveSession = { sr, a, b -> act { repo.moveSession(sr, a, b) } },
+        prepare = { w -> act { repo.prepareWeek(w) } },
+        chain = { chainFor = it },
+    ))
+    chainFor?.let { sr -> GoalChainSheet(snap, sr, close = { chainFor = null }, openWeek = { weekPlan = true }, openMonth = { monthPlan = true }) }
+    moveDayFor?.let { t -> MoveDayDialog(t, today, close = { moveDayFor = null }) { d -> act { repo.moveToDay(t.id, d) } } }
     dayPlan?.let { d ->
         DayPlanSheet(snap, d, close = { dayPlan = null }, assign = { id, k -> act { repo.assignPeriod(id, k) } },
             confirm = { act { val n = repo.confirmDayPlan(d); snackbar.showSnackbar(if (n > 0) "انثبتت الخطة، وترحّلت $n مهام لليوم اللي بعده" else "انثبتت الخطة") } },
@@ -519,15 +531,23 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     if (groupsOpen) GroupsSheet(snap, close = { groupsOpen = false }, save = { list -> act { repo.saveGroups(list) } },
         setPeriod = { g, p -> act { repo.setGroupPeriod(g, p) } })
     menuFor?.let { t ->
-        TaskMenu(t, close = { menuFor = null },
-            startNow = { menuFor = null; startTask(t, false) },
-            prayerMode = snap.settings.prayerMode && t.day == today.toString(),
-            movePeriod = { menuFor = null; periodFor = t },
-            place = { menuFor = null; placeFor = t },
-            postpone = if (t.open) ({ menuFor = null; postponeFor = t }) else null,
-            details = { menuFor = null; editor = t },
-            report = { menuFor = null; reportFor = seriesOf(t) to t.baseTitle },
-            note = { menuFor = null; noteFor = t })
+        val prayerDay = snap.settings.prayerMode
+        TaskMenu(t, close = { menuFor = null }, ops = TaskOps(
+            start = { startTask(t, false) },
+            finish = { nav.finish(t) },
+            movePeriod = if (prayerDay) ({ moveFor = t }) else null,
+            moveDay = { moveDayFor = t },
+            postpone = { postponeFor = t },
+            duplicate = { act { repo.duplicate(t.id) } },
+            details = { detailsFor = t },
+            edit = { editor = t },
+            place = if (prayerDay) ({ placeFor = t }) else null,
+            quran = { quranFor = t },
+            report = { reportFor = seriesOf(t) to t.baseTitle },
+            note = { noteFor = t },
+            close = { act { repo.deferTask(t.id, "close") } },
+            delete = { act { repo.delete(t.id) } },
+        ))
     }
     if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true }, openPrayers = { prayerOpen = true },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false) })
@@ -673,7 +693,7 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
         val late = s.tasks.filter { it.open && it.day < ts }
         if (late.isNotEmpty()) {
             item { Text("متأخرة من أيام سابقة · ${late.size}", style = MaterialTheme.typography.titleMedium) }
-            items(late, key = { "late-" + it.id }) { t -> TaskRow(t, late, s.now, extra = "من ${t.day}", s = s) { nav.openTask(t) } }
+            items(late, key = { "late-" + it.id }) { t -> TaskRow(t, late, s.now, extra = "من ${t.day}", s = s, onLongClick = { nav.taskMenu(t) }) { nav.taskMenu(t) } }
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1071,8 +1091,8 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
                 if (e.virtual && ruleId != null) nav.act {
                     val id = repo.materializeRule(ruleId, tomorrow)
                     val t = id?.let { repo.store.task(it) }
-                    if (t != null) nav.openTask(t)
-                } else nav.openTask(e.task)
+                    if (t != null) nav.taskMenu(t)
+                } else nav.taskMenu(e.task)
             }
             }
         }
@@ -1106,6 +1126,7 @@ fun ReportsTab(s: Snapshot, nav: Nav, backup: () -> Unit, restore: () -> Unit) {
                 Text("المهام المتأخرة: ${s.tasks.count { it.open && it.day < ts }}", style = MaterialTheme.typography.bodyLarge)
             }
         }
+        if (s.settings.styleOf("reports") == "charts") chartReports(s, nav)
         item { QuranReportPanel(s, nav.syncQuran) }
         item { PomodoroReport(s, s.today) { i, label -> nav.act { Repository.get(context).pomoLabel(ts, i, label) } } }
         progressReport(s, nav)

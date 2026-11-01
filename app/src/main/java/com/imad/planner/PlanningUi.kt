@@ -92,7 +92,7 @@ import kotlin.math.roundToInt
 
 /** Long press on a task: move it to another period (or tomorrow) in one tap. */
 @Composable
-fun QuickMoveDialog(t: Task, periods: List<Period>, close: () -> Unit, move: (String) -> Unit, tomorrow: () -> Unit) {
+fun QuickMoveDialog(t: Task, periods: List<Period>, close: () -> Unit, move: (String) -> Unit, tomorrow: () -> Unit, more: () -> Unit = {}) {
     AlertDialog(
         onDismissRequest = close,
         title = { Text("«${t.baseTitle}» لوين؟") },
@@ -104,8 +104,26 @@ fun QuickMoveDialog(t: Task, periods: List<Period>, close: () -> Unit, move: (St
                 FilterChip(selected = false, onClick = { close(); tomorrow() }, label = { Text("بكرا", fontSize = 17.sp) })
             }
         },
-        confirmButton = {},
+        confirmButton = { TextButton(onClick = { close(); more() }) { Text("كل الخيارات") } },
         dismissButton = { TextButton(onClick = close) { Text("إلغاء") } },
+    )
+}
+
+/** Move a task to another day: the next two weeks, one tap. */
+@Composable
+fun MoveDayDialog(t: Task, today: LocalDate, close: () -> Unit, pick: (LocalDate) -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = close,
+        title = { Text("«${t.baseTitle}» لأي يوم؟") },
+        text = {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                (0 until 14).map { today.plusDays(it.toLong()) }.filter { it.toString() != t.day }.forEach { d ->
+                    FilterChip(selected = false, onClick = { pick(d); close() },
+                        label = { Text(when (d) { today -> "اليوم"; today.plusDays(1) -> "بكرا"; else -> "${shortDay(d)} ${d.dayOfMonth}" }) })
+                }
+            }
+        },
+        confirmButton = {}, dismissButton = { TextButton(onClick = close) { Text("إلغاء") } },
     )
 }
 
@@ -223,6 +241,14 @@ fun planItems(s: Snapshot): List<PlanItem> {
     return (plans + rules).distinctBy { it.series }
 }
 
+/** Everything that can be put in a week, including goals not being worked on now (not daily routine). */
+fun planItemsAll(s: Snapshot): List<PlanItem> {
+    val plans = s.plans.map { PlanItem("plan-${it.id}", it.title + if (!it.accepted) " (مقترح)" else "", Cat.ofPlan(it)) }
+    val rules = s.rules.filter { r -> !r.id.startsWith("plan-") && !(r.active && (if (r.weekdays != 0) Integer.bitCount(r.weekdays) >= 5 else r.everyHours <= 24)) }
+        .map { PlanItem(it.id, it.title + if (!it.active) " (متوقف)" else "", it.category) }
+    return (plans + rules).distinctBy { it.series }
+}
+
 private val shortDate = DateTimeFormatter.ofPattern("d MMM", Locale("ar"))
 
 @Composable
@@ -235,25 +261,30 @@ fun ProgressLine(done: Int, goal: Int) {
     }
 }
 
-/** Text and number of one target; it keeps its own typing state and saves as you type. */
+/** Text and number of one target; it keeps its own typing state, saves as you type and keeps the target's other fields. */
 @Composable
 fun TargetFields(id: String, t: Target?, hint: String, save: (Target) -> Unit) {
     var text by remember(id) { mutableStateOf(t?.text ?: "") }
     var goal by remember(id) { mutableStateOf(t?.goal?.takeIf { it > 0 }?.toString() ?: "") }
+    val base = t ?: Target()
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(value = text, onValueChange = { text = it; save(Target(it, digits(goal).toIntOrNull() ?: 0, t?.done ?: 0)) },
+        OutlinedTextField(value = text, onValueChange = { text = it; save(base.copy(text = it, goal = digits(goal).toIntOrNull() ?: 0, auto = false)) },
             placeholder = { Text(hint) }, modifier = Modifier.weight(1f), singleLine = true)
-        OutlinedTextField(value = goal, onValueChange = { goal = it; save(Target(text, digits(it).toIntOrNull() ?: 0, t?.done ?: 0)) },
+        OutlinedTextField(value = goal, onValueChange = { goal = it; save(base.copy(text = text, goal = digits(it).toIntOrNull() ?: 0, auto = false)) },
             placeholder = { Text("عدد") }, modifier = Modifier.width(72.dp), singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
     }
 }
 
 @Composable
-fun MonthPlanSheet(s: Snapshot, close: () -> Unit, save: (String, String, Target) -> Unit) {
+fun MonthPlanSheet(s: Snapshot, close: () -> Unit, chain: (String) -> Unit = {}, save: (String, String, Target) -> Unit) {
     var ym by remember { mutableStateOf(YearMonth.from(s.today)) }
     val weeks = Targets.weeksOf(ym)
-    val items = planItems(s)
+    val allItems = planItemsAll(s)
+    val written = weeks.flatMap { Targets.seriesOfWeek(s.targets, it) }.toSet()
+    val items = (planItems(s) + allItems.filter { it.series in written }).distinctBy { it.series }
+    var picking by remember { mutableStateOf(false) }
+    var extra by remember { mutableStateOf(listOf<PlanItem>()) }
     Sheet("تخطيط ${monthLabel(ym)}", close) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { ym = ym.minusMonths(1) }) { Text("→ السابق") }
@@ -261,29 +292,72 @@ fun MonthPlanSheet(s: Snapshot, close: () -> Unit, save: (String, String, Target
             TextButton(onClick = { ym = ym.plusMonths(1) }) { Text("التالي ←") }
         }
         Muted("لكل مهمة: هدف كل أسبوع (نص + عدد). الأسبوع من الجمعة للخميس.")
+        Secondary("+ هدف ثاني لهالشهر", { picking = true }, Modifier.fillMaxWidth())
         if (items.isEmpty()) Muted("ما في أهداف أو مهام متكررة لتخطيطها. أضف هدف من الخطة.")
-        items.forEach { it0 ->
+        (items + extra).distinctBy { it.series }.forEach { it0 ->
             Panel {
-                Text(it0.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(it0.title, Modifier.clickable { chain(it0.series) }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 weeks.forEachIndexed { i, w ->
                     val key = Targets.weekKey(w)
                     val t = s.targets[key]?.get(it0.series)
                     Text("الأسبوع ${i + 1} · ${w.format(shortDate)} – ${w.plusDays(6).format(shortDate)}", style = MaterialTheme.typography.labelLarge,
                         color = if (s.today in w..w.plusDays(6)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    TargetFields("$key/${it0.series}", t, "مثلاً: حلقة ٣ و٤ + ٩ ريلز") { save(key, it0.series, it) }
+                    TargetFields("$key/${it0.series}", t, "مثلاً: حلقة ٣ و٤ + ٩ ريلز") { save(key, it0.series, it.copy(keep = true)) }
                     if (t != null) ProgressLine(Targets.weekDone(s.targets, w, it0.series), t.goal)
                 }
             }
         }
     }
+    if (picking) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { picking = false },
+        title = { Text("أي هدف؟") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                allItems.filter { c -> (items + extra).none { it.series == c.series } }.forEach { c ->
+                    Text(c.title, Modifier.fillMaxWidth().clickable { extra = extra + c; picking = false }.padding(vertical = 12.dp), style = MaterialTheme.typography.bodyLarge)
+                    HorizontalDivider()
+                }
+            }
+        },
+        confirmButton = {}, dismissButton = { TextButton(onClick = { picking = false }) { Text("إلغاء") } },
+    )
 }
 
+class WeekActions(
+    val save: (String, String, Target) -> Unit,
+    val add: (LocalDate, String) -> Unit,
+    val remove: (LocalDate, String) -> Unit,
+    val routine: (String, Boolean) -> Unit,
+    val moveSession: (String, LocalDate, LocalDate) -> Unit,
+    val prepare: (LocalDate) -> Unit,
+    val chain: (String) -> Unit,
+)
+
 @Composable
-fun WeekPlanSheet(s: Snapshot, close: () -> Unit, save: (String, String, Target) -> Unit) {
-    var start by remember { mutableStateOf(Targets.weekStart(s.today).let { if (s.today.dayOfWeek == java.time.DayOfWeek.THURSDAY) it.plusWeeks(1) else it }) }
+fun Stepper(value: Int, enabled: Boolean = true, change: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { change((value - 1).coerceAtLeast(0)) }, enabled = enabled && value > 0) { Text("−", fontSize = 18.sp) }
+        Text("$value", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        TextButton(onClick = { change(value + 1) }, enabled = enabled) { Text("+", fontSize = 18.sp) }
+    }
+}
+
+/**
+ * The week: the goals in it (added by hand, from the month, or copied from last week when they repeat), what each one
+ * should reach, how many sessions it needs and on which days. It stays editable all week, so a late session can be moved.
+ */
+@Composable
+fun WeekPlanSheet(s: Snapshot, close: () -> Unit, a: WeekActions) {
+    var start by remember { mutableStateOf(Targets.weekStart(s.today).let { if (s.today.dayOfWeek == java.time.DayOfWeek.THURSDAY && s.now > 0 && Clock.minuteOfDay(s.now) > s.settings.dayEnd - 120) it.plusWeeks(1) else it }) }
+    LaunchedEffect(start) { a.prepare(start) }
     val days = Targets.weekDays(start)
-    val items = planItems(s)
+    val all = planItemsAll(s).associateBy { it.series }
+    val inWeek = Targets.seriesOfWeek(s.targets, start).toList().sortedBy { all[it]?.title ?: it }
     var open by remember { mutableStateOf<String?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    var removing by remember { mutableStateOf<String?>(null) }
+    val charts = s.settings.styleOf("week") == "charts"
+    fun sessionsOn(d: LocalDate, sr: String) = s.tasks.filter { it.day == d.toString() && it.note == "wk:$sr" && it.state != "skipped" }
     Sheet("خطة الأسبوع", close) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { start = start.minusWeeks(1) }) { Text("→") }
@@ -291,38 +365,142 @@ fun WeekPlanSheet(s: Snapshot, close: () -> Unit, save: (String, String, Target)
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             TextButton(onClick = { start = start.plusWeeks(1) }) { Text("←") }
         }
-        Muted("اضغط على مهمة ووزّع هدف أسبوعها على الأيام.")
-        items.forEach { it0 ->
-            val wk = s.targets[Targets.weekKey(start)]?.get(it0.series)
-            val done = Targets.weekDone(s.targets, start, it0.series)
-            val spread = Targets.weekSpread(s.targets, start, it0.series)
-            Panel(Modifier.clickable { open = if (open == it0.series) null else it0.series }) {
+        if (charts && inWeek.isNotEmpty()) {
+            // Sessions per day, coloured by goal.
+            val bars = days.map { d -> inWeek.mapIndexed { i, sr -> Seg(groupColor(s, all[sr]?.category ?: "other", i), (s.targets[Targets.dayKey(d)]?.get(sr)?.sessions ?: 0).toFloat()) } }
+            WeekBars(days.map { shortDay(it) }, bars, days.indexOf(s.today).takeIf { it >= 0 }, {}, { it.toInt().toString() })
+            Muted("الجلسات المخططة بكل يوم")
+        }
+        Action("+ هدف لهذا الأسبوع", { picking = true }, Modifier.fillMaxWidth())
+        if (inWeek.isEmpty()) Muted("ما في أهداف بهالأسبوع. ضيف هدف، أو اكتب أهداف الأسابيع من تخطيط الشهر.")
+        inWeek.forEach { sr ->
+            val item = all[sr]
+            val wk = s.targets[Targets.weekKey(start)]?.get(sr)
+            val planned = Targets.sessionsSpread(s.targets, start, sr)
+            val doneSessions = days.sumOf { d -> sessionsOn(d, sr).count { it.done } }
+            val routine = sr in s.settings.weeklyRoutine
+            Panel {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(it0.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(if (open == it0.series) "▲" else "▼")
+                    Text(item?.title ?: sr, Modifier.weight(1f).clickable { a.chain(sr) }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    if (wk?.auto == true) Text("تلقائي ", fontSize = 12.sp, color = MaterialTheme.colorScheme.tertiary)
+                    TextButton(onClick = { open = if (open == sr) null else sr }) { Text(if (open == sr) "▲" else "تعديل ▼") }
                 }
-                Text(wk?.text?.takeIf { it.isNotBlank() }?.let { "هدف الأسبوع: $it" } ?: "ما في هدف أسبوع (من تخطيط الشهر أو هون)", style = MaterialTheme.typography.bodyMedium)
-                if (wk != null && wk.goal > 0) {
-                    ProgressLine(done, wk.goal)
-                    if (spread < wk.goal) Muted("موزّع على الأيام $spread من ${wk.goal}")
+                wk?.text?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+                if (wk != null && wk.goal > 0) MeterRow("الهدف", Targets.weekDone(s.targets, start, sr), wk.goal)
+                val wantSessions = maxOf(planned, wk?.sessions ?: 0)
+                if (wantSessions > 0) MeterRow("الجلسات", doneSessions, wantSessions, color = MaterialTheme.colorScheme.tertiary)
+                if (wk != null && wk.sessions > 0 && planned != wk.sessions) Text("موزّع على الأيام $planned من ${wk.sessions} جلسات",
+                    style = MaterialTheme.typography.bodyMedium, color = if (planned < wk.sessions) Status.missed else MaterialTheme.colorScheme.onSurfaceVariant)
+                // Late: sessions of past days not done.
+                val late = days.filter { it.isBefore(s.today) }.flatMap { d -> sessionsOn(d, sr).filter { it.open }.map { d } }
+                if (late.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${late.size} جلسات متأخرة", Modifier.weight(1f), color = Status.missed)
+                    TextButton(onClick = { late.forEach { d -> a.moveSession(sr, d, s.today) } }) { Text("انقلها لليوم") }
                 }
-                if (open == it0.series) {
-                    TargetFields("${Targets.weekKey(start)}/${it0.series}", wk, "هدف الأسبوع") { save(Targets.weekKey(start), it0.series, it) }
+                if (open == sr) {
                     HorizontalDivider()
+                    SwitchRow("يتكرر كل أسبوع (بينسخ حاله لحاله)", routine) { a.routine(sr, it) }
+                    Text("هدف الأسبوع", style = MaterialTheme.typography.labelLarge)
+                    TargetFields("${Targets.weekKey(start)}/$sr", wk, "مثلاً: حلقة ٣ و٤ + ٩ ريلز") { a.save(Targets.weekKey(start), sr, it.copy(keep = true)) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("جلسات", Modifier.weight(1f))
+                        Stepper(wk?.sessions ?: 0) { n -> a.save(Targets.weekKey(start), sr, (wk ?: Target()).copy(sessions = n, keep = true, auto = false)) }
+                        var mins by remember("${start}m$sr") { mutableStateOf((wk?.minutes?.takeIf { it > 0 } ?: 60).toString()) }
+                        OutlinedTextField(mins, { v -> mins = v; digits(v).toIntOrNull()?.let { m -> a.save(Targets.weekKey(start), sr, (wk ?: Target()).copy(minutes = m, keep = true, auto = false)) } },
+                            label = { Text("د/جلسة") }, modifier = Modifier.width(92.dp), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    }
+                    Text("الأيام", style = MaterialTheme.typography.labelLarge)
                     days.forEach { d ->
                         val key = Targets.dayKey(d)
-                        val t = s.targets[key]?.get(it0.series)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Column(Modifier.width(54.dp)) {
-                                Text(shortDay(d), style = MaterialTheme.typography.labelLarge, color = if (d == s.today) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                                Text(d.dayOfMonth.toString(), style = MaterialTheme.typography.bodySmall)
+                        val t = s.targets[key]?.get(sr)
+                        val here = sessionsOn(d, sr)
+                        val past = d.isBefore(s.today)
+                        Column(Modifier.fillMaxWidth().background(if (d == s.today) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f) else Color.Transparent, RoundedCornerShape(10.dp)).padding(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("${shortDay(d)} ${d.dayOfMonth}", Modifier.width(62.dp), style = MaterialTheme.typography.labelLarge,
+                                    color = if (d == s.today) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                Text(buildString {
+                                    val done = here.count { it.done }; val miss = if (past) here.count { it.open } else 0
+                                    if (done > 0) append("✓$done ")
+                                    if (miss > 0) append("✗$miss")
+                                }, Modifier.weight(1f), fontSize = 13.sp, color = if (past && here.any { it.open }) Status.missed else Status.done)
+                                Text("جلسات", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Stepper(t?.sessions ?: 0, enabled = !past) { n -> a.save(key, sr, (t ?: Target()).copy(sessions = n, auto = false)) }
                             }
-                            Box(Modifier.weight(1f)) { TargetFields("$key/${it0.series}", t, "هدف اليوم") { save(key, it0.series, it) } }
+                            TargetFields("$key/$sr", t, "هدف اليوم") { a.save(key, sr, it) }
+                            if (t != null && t.goal > 0 && t.done > 0) ProgressLine(t.done, t.goal)
                         }
-                        if (t != null && t.goal > 0 && t.done > 0) ProgressLine(t.done, t.goal)
                     }
+                    Secondary("شيل من هالأسبوع", { removing = sr }, Modifier.fillMaxWidth())
                 }
             }
+        }
+    }
+    if (picking) {
+        val candidates = all.values.filter { it.series !in inWeek }.sortedBy { it.title }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { picking = false },
+            title = { Text("أي هدف بدك تحط بهالأسبوع؟") },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    if (candidates.isEmpty()) Muted("كل الأهداف موجودة بالأسبوع.")
+                    candidates.forEach { c ->
+                        Text(c.title, Modifier.fillMaxWidth().clickable { a.add(start, c.series); open = c.series; picking = false }.padding(vertical = 12.dp),
+                            style = MaterialTheme.typography.bodyLarge)
+                        HorizontalDivider()
+                    }
+                }
+            },
+            confirmButton = {}, dismissButton = { TextButton(onClick = { picking = false }) { Text("إلغاء") } },
+        )
+    }
+    removing?.let { sr ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("شيل «${all[sr]?.title ?: sr}» من هالأسبوع؟") },
+            text = { Text("بتنشال أهدافه وجلساته اللي ما بلّشت هالأسبوع. الهدف نفسه بيضل." + if (sr in s.settings.weeklyRoutine) " بيرجع الأسبوع الجاي لأنه متكرر." else "") },
+            confirmButton = { TextButton(onClick = { a.remove(start, sr); removing = null }) { Text("شيل") } },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("إلغاء") } },
+        )
+    }
+}
+
+/** One goal from year to day: the year plan, this month, its weeks and this week's days. */
+@Composable
+fun GoalChainSheet(s: Snapshot, series: String, close: () -> Unit, openWeek: () -> Unit, openMonth: () -> Unit) {
+    val title = planItemsAll(s).firstOrNull { it.series == series }?.title ?: series
+    val plan = s.plans.firstOrNull { "plan-${it.id}" == series }
+    val ym = YearMonth.from(s.today)
+    Sheet(title, close) {
+        if (plan != null) {
+            Text("السنة", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            PlanMath.pace(plan, s.today)?.let { (exp, act) -> MeterRow("المفروض ${num(exp)} · إنت", act.toInt(), exp.toInt().coerceAtLeast(1), plan.unit) }
+            val month = s.months[Months.key("p:${plan.id}", ym.toString())]?.value ?: planMonthDefault(plan, ym, s.today, s.memLast)
+            month?.let { Text("هدف ${monthLabel(ym)}: ${num(it)} ${plan.unit}", style = MaterialTheme.typography.bodyLarge) }
+        }
+        Text("أسابيع ${monthLabel(ym)}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Targets.weeksOf(ym).forEachIndexed { i, w ->
+            val t = s.targets[Targets.weekKey(w)]?.get(series)
+            Column {
+                Text("الأسبوع ${i + 1}: " + (t?.text?.ifBlank { null } ?: "—"), style = MaterialTheme.typography.bodyLarge,
+                    color = if (s.today in w..w.plusDays(6)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                if (t != null && t.goal > 0) ProgressLine(Targets.weekDone(s.targets, w, series), t.goal)
+            }
+        }
+        val start = Targets.weekStart(s.today)
+        Text("أيام هالأسبوع", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        Targets.weekDays(start).forEach { d ->
+            val t = s.targets[Targets.dayKey(d)]?.get(series)
+            val tasks = s.tasks.filter { it.day == d.toString() && seriesOf(it) == series && it.state != "skipped" }
+            if (t != null || tasks.isNotEmpty()) Row {
+                Text("${shortDay(d)} ${d.dayOfMonth}", Modifier.width(62.dp))
+                Text(listOfNotNull(t?.text?.ifBlank { null }, t?.goal?.takeIf { it > 0 }?.let { "${t.done}/$it" },
+                    tasks.takeIf { it.isNotEmpty() }?.let { l -> "${l.count { it.done }}/${l.size} مهام" }).joinToString(" · "), Modifier.weight(1f))
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Secondary("تخطيط الشهر", { close(); openMonth() }, Modifier.weight(1f))
+            Secondary("خطة الأسبوع", { close(); openWeek() }, Modifier.weight(1f))
         }
     }
 }

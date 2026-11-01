@@ -137,7 +137,8 @@ data class Event(
     val delayMin: Int = 0,
 )
 
-fun seriesOf(t: Task) = t.ruleId ?: t.note.takeIf { it.startsWith("grp:") } ?: t.id
+/** The series a task belongs to: its recurring rule, its split group, the goal of a week session ("wk:"), or itself. */
+fun seriesOf(t: Task) = t.ruleId ?: t.note.takeIf { it.startsWith("grp:") } ?: t.note.takeIf { it.startsWith("wk:") }?.removePrefix("wk:") ?: t.id
 
 @Entity(tableName = "goals")
 data class Goal(
@@ -347,7 +348,13 @@ data class Settings(
     val periodNote: Boolean = true,
     /** series -> ward of the Quran app it opens. */
     val quranLinks: Map<String, QuranLink> = emptyMap(),
+    /** Goals whose week target repeats by itself every week. */
+    val weeklyRoutine: Set<String> = emptySet(),
+    /** How reports and plans are shown: charts | lists; [viewPages] overrides it per page. */
+    val viewStyle: String = "charts",
+    val viewPages: Map<String, String> = emptyMap(),
 ) {
+    fun styleOf(page: String) = viewPages[page] ?: viewStyle
     fun alarmBefore(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(0)?.toIntOrNull() ?: 0
     fun alarmAtAdhan(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(1) == "1"
 
@@ -403,7 +410,7 @@ data class Settings(
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
             "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle", "swipeAction",
             "dayMode", "prayers", "prayerBefore", "prayerAfter", "prayerOffsets", "groupPeriods", "places", "fajrNap",
-            "prayerAlarms", "morningNote", "periodNote", "quranLinks")
+            "prayerAlarms", "morningNote", "periodNote", "quranLinks", "weeklyRoutine", "viewStyle", "viewPages")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -427,6 +434,8 @@ data class Settings(
                 prayerAlarms = jsonMap(m["prayerAlarms"]) { it },
                 morningNote = m["morningNote"] != "0", periodNote = m["periodNote"] != "0",
                 quranLinks = parseLinks(m["quranLinks"]),
+                weeklyRoutine = runCatching { org.json.JSONArray(m["weeklyRoutine"] ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } }.getOrDefault(emptySet()),
+                viewStyle = m["viewStyle"] ?: "charts", viewPages = jsonMap(m["viewPages"]) { it },
             ).also { Cat.groups = it.groups }
         }
     }
@@ -966,8 +975,157 @@ class Repository(private val context: Context) {
     }
 
     suspend fun setTarget(key: String, series: String, t: Target) = lock.withLock {
-        val all = Targets.put(Targets.parse(store.meta("targets")), key, series, t)
-        store.put(Meta("targets", Targets.encode(all)))
+        val old = targetsLocked()
+        val all = Targets.put(old, key, series, t)
+        saveTargetsLocked(all)
+        // Only a change in the number of sessions touches the tasks.
+        if (key.startsWith("d:") && (old[key]?.get(series)?.sessions ?: 0) != t.sessions) {
+            syncSessionsLocked(Targets.weekStart(LocalDate.parse(key.removePrefix("d:"))))
+            replanLocked()
+        }
+    }
+
+    // ---------- week plan: goals, sessions, weekly routine ----------
+
+    private suspend fun targetsLocked() = Targets.parse(store.meta("targets"))
+    private suspend fun saveTargetsLocked(all: Map<String, Map<String, Target>>) = store.put(Meta("targets", Targets.encode(all)))
+
+    suspend fun addToWeek(start: LocalDate, series: String) = lock.withLock {
+        val all = targetsLocked()
+        if (all[Targets.weekKey(start)]?.containsKey(series) != true) saveTargetsLocked(Targets.put(all, Targets.weekKey(start), series, Target(keep = true)))
+    }
+
+    /** Takes a goal out of one week: its targets and the sessions not started yet. */
+    suspend fun removeFromWeek(start: LocalDate, series: String) = lock.withLock {
+        saveTargetsLocked(Targets.removeFromWeek(targetsLocked(), start, series))
+        markRoutineHandledLocked(start, series)
+        val today = Clock.today()
+        for (d in Targets.weekDays(start).filter { !it.isBefore(today) })
+            store.tasksOn(d.toString()).filter { it.note == "wk:$series" && it.open && !it.running && it.spent == 0L }.forEach { store.delete(it.id) }
+        replanLocked()
+    }
+
+    suspend fun setWeeklyRoutine(series: String, on: Boolean) = lock.withLock {
+        val set = runCatching { org.json.JSONArray(store.meta("weeklyRoutine") ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) } } }.getOrDefault(emptyList()).toMutableSet()
+        if (on) set += series else set -= series
+        store.put(Meta("weeklyRoutine", org.json.JSONArray(set.toList()).toString()))
+    }
+
+    private suspend fun markRoutineHandledLocked(start: LocalDate, series: String) {
+        val a = org.json.JSONArray(store.meta("routineWeeks")?.takeIf { it.isNotBlank() } ?: "[]")
+        a.put("$start|$series")
+        store.put(Meta("routineWeeks", a.toString()))
+    }
+
+    /** Weekly routine goals get this week as a copy of the last one, once (a removed one is not brought back). */
+    private suspend fun ensureRoutineWeekLocked(start: LocalDate) {
+        val routine = settingsLocked().weeklyRoutine
+        if (routine.isEmpty()) return
+        val handled = runCatching { org.json.JSONArray(store.meta("routineWeeks") ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } }.getOrDefault(emptySet())
+        var all = targetsLocked()
+        var changed = false
+        for (sr in routine) {
+            if ("$start|$sr" in handled) continue
+            val next = Targets.copyWeek(all, start, sr)
+            if (next != all) { all = next; changed = true }
+            markRoutineHandledLocked(start, sr)
+        }
+        if (changed) saveTargetsLocked(all)
+    }
+
+    /** Opens a week for planning: routine goals copied, sessions made into tasks. */
+    suspend fun prepareWeek(start: LocalDate) = lock.withLock {
+        ensureRoutineWeekLocked(start)
+        syncSessionsLocked(start)
+        replanLocked()
+    }
+
+    /** What a series is called and which group it belongs to. */
+    private suspend fun seriesInfoLocked(series: String): Pair<String, String> {
+        store.rule(series)?.let { return it.title to it.category }
+        plansLocked().firstOrNull { "plan-${it.id}" == series }?.let { return it.title to Cat.ofPlan(it) }
+        return series to "other"
+    }
+
+    /**
+     * The sessions written on each day of a week become tasks ("wk:<series>"). Missing ones are made; extra ones that
+     * were not started are removed. Past days are left as they are, so what was not done stays visible.
+     */
+    private suspend fun syncSessionsLocked(start: LocalDate) {
+        val all = targetsLocked()
+        val today = Clock.today()
+        for (d in Targets.weekDays(start).filter { !it.isBefore(today) }) {
+            val ds = d.toString()
+            val dayTargets = all[Targets.dayKey(d)].orEmpty()
+            val onDay = store.tasksOn(ds).filter { it.note.startsWith("wk:") && it.state != "skipped" }
+            val seriesHere = dayTargets.filterValues { it.sessions > 0 }.keys + onDay.map { it.note.removePrefix("wk:") }
+            for (sr in seriesHere) {
+                val want = dayTargets[sr]?.sessions ?: 0
+                val have = onDay.filter { it.note == "wk:$sr" }
+                if (have.size < want) {
+                    val (title, cat) = seriesInfoLocked(sr)
+                    val week = all[Targets.weekKey(start)]?.get(sr)
+                    val text = dayTargets[sr]?.text?.takeIf { it.isNotBlank() }
+                    repeat(want - have.size) {
+                        store.put(Task(title = title + (text?.let { " · $it" } ?: ""), minutes = week?.minutes?.takeIf { it > 0 } ?: 60,
+                            day = ds, category = cat, note = "wk:$sr"))
+                    }
+                } else if (have.size > want) {
+                    have.filter { it.open && !it.running && it.spent == 0L }.sortedByDescending { it.created }.take(have.size - want).forEach { store.delete(it.id) }
+                }
+            }
+        }
+    }
+
+    /** A week session moved to another day: the day counts follow it, so the week plan stays right. */
+    private suspend fun shiftSessionLocked(t: Task, to: String) {
+        if (!t.note.startsWith("wk:") || t.day == to) return
+        val sr = t.note.removePrefix("wk:")
+        var all = targetsLocked()
+        val from = Targets.dayKey(LocalDate.parse(t.day)); val dest = Targets.dayKey(LocalDate.parse(to))
+        val a = all[from]?.get(sr) ?: Target()
+        val b = all[dest]?.get(sr) ?: Target()
+        all = Targets.put(all, from, sr, a.copy(sessions = (a.sessions - 1).coerceAtLeast(0)))
+        all = Targets.put(all, dest, sr, b.copy(sessions = b.sessions + 1))
+        saveTargetsLocked(all)
+    }
+
+    /** Moves a task to any day. */
+    suspend fun moveToDay(id: String, day: LocalDate) = lock.withLock {
+        val t = store.task(id) ?: return@withLock
+        if (!t.open) return@withLock
+        snapshotLocked("نقل «${t.baseTitle}»")
+        val now = System.currentTimeMillis()
+        shiftSessionLocked(t, day.toString())
+        store.put(t.copy(day = day.toString(), spent = Maths.spent(t, now), started = 0, planned = if (t.pinned) Clock.epoch(day, Clock.minuteOfDay(t.planned)) else 0,
+            period = "", preferMin = -1, parallelTo = null, overflow = false))
+        log(t, "postpone", "لـ ${day}")
+        replanLocked()
+    }
+
+    /** Moves one planned session of a goal from a day to another (week plan). */
+    suspend fun moveSession(series: String, from: LocalDate, to: LocalDate) = lock.withLock {
+        val t = store.tasksOn(from.toString()).firstOrNull { it.note == "wk:$series" && it.open && !it.running }
+        if (t != null) {
+            shiftSessionLocked(t, to.toString())
+            store.put(t.copy(day = to.toString(), planned = 0, period = "", preferMin = -1, started = 0, spent = Maths.spent(t, System.currentTimeMillis())))
+            log(t, "postpone", "جلسة لـ $to")
+        } else {
+            var all = targetsLocked()
+            val a = all[Targets.dayKey(from)]?.get(series) ?: Target(); val b = all[Targets.dayKey(to)]?.get(series) ?: Target()
+            all = Targets.put(all, Targets.dayKey(from), series, a.copy(sessions = (a.sessions - 1).coerceAtLeast(0)))
+            saveTargetsLocked(Targets.put(all, Targets.dayKey(to), series, b.copy(sessions = b.sessions + 1)))
+        }
+        syncSessionsLocked(Targets.weekStart(to))
+        replanLocked()
+    }
+
+    /** A copy of a task on the same day, not started. */
+    suspend fun duplicate(id: String) = lock.withLock {
+        val t = store.task(id) ?: return@withLock
+        store.put(t.copy(id = UUID.randomUUID().toString(), state = "planned", spent = 0, started = 0, finishedAt = 0, doneUnits = 0,
+            ruleId = null, note = if (t.note.startsWith("wk:")) "" else t.note, planned = if (t.pinned) t.planned else 0, created = System.currentTimeMillis()))
+        replanLocked()
     }
 
     /** After finishing a task: how much of its day target was done. */
@@ -1122,6 +1280,7 @@ class Repository(private val context: Context) {
     suspend fun refreshDay() = lock.withLock {
         autoCloseLocked()
         ensureDayLocked(Clock.today())
+        Targets.weekStart(Clock.today()).let { ensureRoutineWeekLocked(it); syncSessionsLocked(it) }
         replanLocked()
     }
 
@@ -1442,6 +1601,7 @@ class Repository(private val context: Context) {
         }
         log(t, "postpone", reason.trim())
         val tomorrow = LocalDate.parse(t.day).coerceAtLeast(Clock.today()).plusDays(1)
+        shiftSessionLocked(t, tomorrow.toString())
         store.put(
             t.copy(
                 day = tomorrow.toString(), spent = Maths.spent(t, now), started = 0,
@@ -1608,6 +1768,7 @@ class Repository(private val context: Context) {
         val next = LocalDate.parse(ds).plusDays(1)
         val t = if (t0.running) t0.copy(spent = Maths.spent(t0, now), started = 0) else t0
         if (mode == "carry") {
+            shiftSessionLocked(t, next.toString())
             // If the next day already has this rule's own task, it steps aside for this one.
             t.ruleId?.let { rid -> store.tasksOn(next.toString()).filter { it.ruleId == rid && it.open && it.spent == 0L && it.doneUnits == 0 }.forEach { store.delete(it.id) } }
             store.put(t.copy(day = next.toString(), planned = if (t.pinned && t.planned > 0) Clock.epoch(next, Clock.minuteOfDay(t.planned)) else 0,
@@ -1741,7 +1902,7 @@ class Repository(private val context: Context) {
         val logs = JSONArray()
         store.allLogs().forEach { l -> logs.put(JSONObject().put("id", l.id).put("goalId", l.goalId).put("day", l.day).put("value", l.value)) }
         val meta = JSONObject()
-        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
+        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets", "routineWeeks")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
         store.allMeta().filter { it.key.startsWith("pomo:") || it.key.startsWith("dayPlanned:") || it.key.startsWith("quran:") }.forEach { meta.put(it.key, it.value) }
         val events = JSONArray()
         store.allEvents().forEach { e ->
