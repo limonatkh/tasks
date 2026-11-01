@@ -178,6 +178,7 @@ fun WeekView(s: Snapshot, nav: Nav) {
                 TextButton(onClick = { offset++ }) { Text("التالي ›") }
             }
         }
+        if (s.settings.styleOf("plan") == "charts") item { PlanWeekChart(s, days, proj) }
         item { WeekHeader(days, s.today) }
         for (cat in Cat.keys) {
             val inCat = rows.filter { Cat.known(it.category) == cat }
@@ -292,6 +293,7 @@ fun MonthView(s: Snapshot, nav: Nav) {
                 TextButton(onClick = { offset++ }) { Text("التالي ›") }
             }
         }
+        if (s.settings.styleOf("plan") == "charts") item { PlanMonthChart(s, ym) }
         for (cat in Cat.keys) {
             val targets = targetsIn(cat, s).filter { !(it.plan?.kind == "review") }
             val habits = habitsIn(cat, s).filter { it.active }
@@ -364,6 +366,7 @@ fun YearView(s: Snapshot, nav: Nav) {
                 Action("+ هدف جديد", nav.newGoal, Modifier.fillMaxWidth())
             }
         }
+        if (s.settings.styleOf("plan") == "charts") item { PlanYearChart(s) }
         for (cat in Cat.keys) {
             val targets = targetsIn(cat, s)
             val habits = habitsIn(cat, s)

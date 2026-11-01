@@ -80,6 +80,13 @@ object Targets {
         return out
     }
 
+    /** Splits a month amount over its weeks: equal parts, the remainder to the first weeks. */
+    fun split(total: Int, parts: Int): List<Int> {
+        if (parts <= 0) return emptyList()
+        val base = total / parts; val rest = total % parts
+        return (0 until parts).map { base + if (it < rest) 1 else 0 }
+    }
+
     fun put(all: Map<String, Map<String, Target>>, key: String, series: String, t: Target): Map<String, Map<String, Target>> {
         val inner = all[key].orEmpty().toMutableMap()
         if (t.empty) inner.remove(series) else inner[series] = t

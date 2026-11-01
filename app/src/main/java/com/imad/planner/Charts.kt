@@ -360,3 +360,63 @@ fun PomodoroCard(s: Snapshot) {
             .forEach { (l, v) -> LegendRow(Color(0xFFD0574E), l, "${v.size}") }
     }
 }
+
+// ---------------- Charts on the plan pages ----------------
+
+/** Planned time per day of the week, coloured by group; tap a day to list it. */
+@Composable
+fun PlanWeekChart(s: Snapshot, days: List<LocalDate>, proj: Map<LocalDate, List<Projector.Entry>>) {
+    var sel by remember { mutableStateOf<Int?>(null) }
+    val groups = s.settings.groups
+    val per = days.map { d -> proj[d].orEmpty().map { it.task }.filter { it.state != "skipped" } }
+    val bars = per.map { l -> l.groupBy { it.category }.entries.sortedByDescending { e -> e.value.sumOf { it.minutes } }
+        .map { (k, v) -> Seg(groupColor(s, k, groups.indexOfFirst { it.key == k }.coerceAtLeast(0)), v.sumOf { it.minutes }.toFloat()) } }
+    val pick = sel?.let { per[it] } ?: per.flatten()
+    ChartCard {
+        val (v, u) = bigMinutes(pick.sumOf { it.minutes })
+        BigValue(v, u, "مخطط " + (sel?.let { shortDay(days[it]) } ?: "هالأسبوع") + " · ${pick.size} مهمة")
+        WeekBars(days.map { shortDay(it) }, bars, sel, { sel = if (sel == it) null else it }, { durLabel(it.toInt()) })
+        pick.groupBy { it.category }.entries.sortedByDescending { e -> e.value.sumOf { it.minutes } }.take(3).forEach { (k, l) ->
+            LegendRow(groupColor(s, k, groups.indexOfFirst { it.key == k }.coerceAtLeast(0)), Cat.name(k), durLabel(l.sumOf { it.minutes }))
+        }
+    }
+}
+
+/** The weeks of a month: sessions done against planned, and each goal's month progress. */
+@Composable
+fun PlanMonthChart(s: Snapshot, ym: java.time.YearMonth) {
+    val weeks = Targets.weeksOf(ym)
+    var sel by remember { mutableStateOf<Int?>(null) }
+    val stats = weeks.map { w ->
+        val series = Targets.seriesOfWeek(s.targets, w)
+        val planned = series.sumOf { maxOf(Targets.sessionsSpread(s.targets, w, it), s.targets[Targets.weekKey(w)]?.get(it)?.sessions ?: 0) }
+        val done = Targets.weekDays(w).sumOf { d -> s.tasks.count { it.day == d.toString() && it.note.startsWith("wk:") && it.done } }
+        done to planned
+    }
+    ChartCard {
+        val pick = sel?.let { listOf(stats[it]) } ?: stats
+        BigValue("${pick.sumOf { it.first }}", "جلسة", "من ${pick.sumOf { it.second }} مخططة · " + (sel?.let { "الأسبوع ${it + 1}" } ?: monthLabel(ym)))
+        WeekBars(weeks.indices.map { "أ${it + 1}" }, stats.map { (d, p) -> listOf(Seg(Status.done, d.toFloat()), Seg(MaterialTheme.colorScheme.outlineVariant, (p - d).coerceAtLeast(0).toFloat())) },
+            sel, { sel = if (sel == it) null else it }, { it.toInt().toString() })
+        s.plans.filter { it.accepted }.forEach { p ->
+            PlanMath.pace(p, s.today)?.let { (exp, act) -> MeterRow(p.title + " (المفروض ${num(exp)})", act.toInt(), exp.toInt().coerceAtLeast(1), p.unit) }
+        }
+    }
+}
+
+/** The year: finished tasks per month, and where each plan stands. */
+@Composable
+fun PlanYearChart(s: Snapshot) {
+    val year = s.today.year
+    val months = (1..12).map { java.time.YearMonth.of(year, it) }
+    var sel by remember { mutableStateOf<Int?>(null) }
+    val per = months.map { ym -> s.tasks.filter { it.done && it.day.startsWith(ym.toString()) } }
+    ChartCard {
+        val pick = sel?.let { per[it] } ?: per.flatten()
+        BigValue("${pick.size}", "مهمة منجزة", sel?.let { monthLabel(months[it]) } ?: "سنة $year")
+        WeekBars(months.map { "${it.monthValue}" }, per.map { l -> listOf(Seg(Status.done, l.size.toFloat())) }, sel, { sel = if (sel == it) null else it }, { it.toInt().toString() })
+        s.plans.filter { it.accepted }.forEach { p ->
+            PlanMath.pace(p, s.today)?.let { (exp, act) -> MeterRow(p.title, act.toInt(), exp.toInt().coerceAtLeast(1), p.unit) }
+        }
+    }
+}

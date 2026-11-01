@@ -607,7 +607,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
             FilterChip(selected = s.viewStyle == "charts", onClick = { set("viewStyle", "charts") }, label = { Text("رسوم بيانية") })
             FilterChip(selected = s.viewStyle == "lists", onClick = { set("viewStyle", "lists") }, label = { Text("قوائم") })
         }
-        listOf("reports" to "التقارير", "week" to "خطة الأسبوع").forEach { (page, name) ->
+        listOf("reports" to "التقارير", "week" to "خطة الأسبوع", "plan" to "صفحة الخطة").forEach { (page, name) ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(name, Modifier.weight(1f))
                 listOf("" to "زي العام", "charts" to "رسوم", "lists" to "قوائم").forEach { (v, l) ->
@@ -698,7 +698,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.13")
+        Muted("الإصدار 0.14")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

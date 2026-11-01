@@ -241,6 +241,16 @@ fun planItems(s: Snapshot): List<PlanItem> {
     return (plans + rules).distinctBy { it.series }
 }
 
+/** How much of a plan falls in one month (the month plan holds totals for some kinds, so the month before is taken off). */
+fun monthAmount(s: Snapshot, p: Plan, ym: YearMonth): Int? {
+    fun value(m: YearMonth) = s.months[Months.key("p:${p.id}", m.toString())]?.value ?: planMonthDefault(p, m, s.today, s.memLast)
+    val v = value(ym) ?: return null
+    val cumulative = p.kind in setOf("memorize", "amount", "cycle")
+    if (!cumulative) return v.toInt()
+    val before = if (!ym.isAfter(YearMonth.from(s.today))) p.done.toDouble() else value(ym.minusMonths(1)) ?: p.done.toDouble()
+    return (v - before).toInt().coerceAtLeast(0)
+}
+
 /** Everything that can be put in a week, including goals not being worked on now (not daily routine). */
 fun planItemsAll(s: Snapshot): List<PlanItem> {
     val plans = s.plans.map { PlanItem("plan-${it.id}", it.title + if (!it.accepted) " (مقترح)" else "", Cat.ofPlan(it)) }
@@ -297,6 +307,19 @@ fun MonthPlanSheet(s: Snapshot, close: () -> Unit, chain: (String) -> Unit = {},
         (items + extra).distinctBy { it.series }.forEach { it0 ->
             Panel {
                 Text(it0.title, Modifier.clickable { chain(it0.series) }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                val plan = s.plans.firstOrNull { "plan-${it.id}" == it0.series }
+                val amount = plan?.let { monthAmount(s, it, ym) }
+                if (plan != null && amount != null && amount > 0) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("هدف الشهر من خطة السنة: $amount ${plan.unit}", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    TextButton(onClick = {
+                        // Only weeks without a number get one; what was written by hand stays.
+                        Targets.split(amount, weeks.size).forEachIndexed { i, n ->
+                            val key = Targets.weekKey(weeks[i])
+                            val cur = s.targets[key]?.get(it0.series)
+                            if ((cur?.goal ?: 0) == 0) save(key, it0.series, (cur ?: Target()).copy(goal = n, text = cur?.text?.ifBlank { null } ?: "$n ${plan.unit}", keep = true, auto = true))
+                        }
+                    }) { Text("وزّع على الأسابيع") }
+                }
                 weeks.forEachIndexed { i, w ->
                     val key = Targets.weekKey(w)
                     val t = s.targets[key]?.get(it0.series)

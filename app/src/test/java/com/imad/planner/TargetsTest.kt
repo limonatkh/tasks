@@ -56,4 +56,9 @@ class TargetsTest {
         assertTrue("pod" in Targets.seriesOfWeek(all, start))
         assertTrue(Targets.removeFromWeek(all, start, "pod").isEmpty())
     }
+
+    @Test fun monthSplitsOverWeeks() {
+        assertEquals(listOf(3, 3, 2, 2), Targets.split(10, 4))
+        assertEquals(10, Targets.split(10, 4).sum())
+    }
 }
