@@ -193,6 +193,7 @@ class Nav(
     val dayPlan: (LocalDate) -> Unit = {},
     val quran: (Task) -> Unit = {},
     val syncQuran: () -> Unit = {},
+    val sports: () -> Unit = {},
 )
 
 @Composable
@@ -239,6 +240,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     var weekPlan by remember { mutableStateOf(false) }
     var dayPlan by remember { mutableStateOf<LocalDate?>(null) }
     var chainFor by remember { mutableStateOf<String?>(null) }
+    var sportsOpen by remember { mutableStateOf(false) }
     var moveDayFor by remember { mutableStateOf<Task?>(null) }
     var closeDay by remember { mutableStateOf(false) }
     var restoreText by remember { mutableStateOf<String?>(null) }
@@ -382,6 +384,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         weekPlan = { weekPlan = true },
         dayPlan = { d -> act { repo.prepareDay(d) }; dayPlan = d },
         quran = { quranFor = it },
+        sports = { sportsOpen = true },
         syncQuran = { act { val st = repo.syncQuran(); if (st != QuranState.OK) snackbar.showSnackbar(st.text) } },
         look = { series, color, icon -> act { repo.setLook(series, color, icon) } },
     )
@@ -520,10 +523,21 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         prepare = { w -> act { repo.prepareWeek(w) } },
         chain = { chainFor = it },
     ))
+    if (sportsOpen) SportsSheet(snap, close = { sportsOpen = false }, ops = SportOps(
+        saveRecord = { g -> act { repo.saveRecord(g) } },
+        deleteRecord = { id -> act { repo.deleteRecord(id) } },
+        pause = { id, on -> act { repo.setPaused(id, on) } },
+        icon = { key, v -> act { repo.setLook(listOf(key), null, v) } },
+        saveSession = { r, m -> act { repo.saveSession(r, m) } },
+        deleteSession = { id -> act { repo.deleteSession(id) } },
+        set = { k, v -> act { repo.setSetting(k, v) } },
+        weekPlan = { weekPlan = true },
+    ))
     chainFor?.let { sr -> GoalChainSheet(snap, sr, close = { chainFor = null }, openWeek = { weekPlan = true }, openMonth = { monthPlan = true }) }
     moveDayFor?.let { t -> MoveDayDialog(t, today, close = { moveDayFor = null }) { d -> act { repo.moveToDay(t.id, d) } } }
     dayPlan?.let { d ->
         DayPlanSheet(snap, d, close = { dayPlan = null }, assign = { id, k -> act { repo.assignPeriod(id, k) } },
+            routine = { t, on -> act { repo.setRoutine(seriesOf(t), on); if (on && t.period.isEmpty()) repo.assignPeriod(t.id, snap.settings.periodAt(d, snap.settings.dayStart)) } },
             confirm = { act { val n = repo.confirmDayPlan(d); snackbar.showSnackbar(if (n > 0) "انثبتت الخطة، وترحّلت $n مهام لليوم اللي بعده" else "انثبتت الخطة") } },
             details = { detailsFor = it })
     }
@@ -850,7 +864,7 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
     val upcoming = !t.running && t.spent == 0L && t.doneUnits == 0 && t.planned > now + 60_000
     val isReview = s.plans.any { it.kind == "review" && t.ruleId == "plan-${it.id}" }
     val isMemorize = s.plans.any { it.kind == "memorize" && t.ruleId == "plan-${it.id}" }
-    val members = t.ruleId?.let { id -> s.rules.firstOrNull { it.id == id } }?.members?.let(Members::parse).orEmpty()
+    val members = s.rules.firstOrNull { it.id == seriesOf(t) }?.members?.let(Members::parse).orEmpty()
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(

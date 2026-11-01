@@ -130,6 +130,7 @@ fun PlanTab(s: Snapshot, nav: Nav) {
             Secondary("خطة الأسبوع", nav.weekPlan, Modifier.weight(1f))
             Secondary("رتّب بكرا", { nav.dayPlan(s.today.plusDays(1)) }, Modifier.weight(1f))
         }
+        Secondary("الرياضة: الأرقام والحصص", nav.sports, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
         when (mode) {
             0 -> WeekView(s, nav)
             1 -> MonthView(s, nav)

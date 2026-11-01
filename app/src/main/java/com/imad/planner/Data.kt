@@ -353,6 +353,12 @@ data class Settings(
     /** How reports and plans are shown: charts | lists; [viewPages] overrides it per page. */
     val viewStyle: String = "charts",
     val viewPages: Map<String, String> = emptyMap(),
+    /** Training sessions are put on days from the week plan (true) or repeat by themselves (false). */
+    val sportByWeek: Boolean = true,
+    /** Records not followed for now. */
+    val pausedGoals: Set<String> = emptySet(),
+    /** How records show: both (picture and name) | icon (picture only). */
+    val recordStyle: String = "both",
 ) {
     fun styleOf(page: String) = viewPages[page] ?: viewStyle
     fun alarmBefore(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(0)?.toIntOrNull() ?: 0
@@ -410,7 +416,7 @@ data class Settings(
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
             "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle", "swipeAction",
             "dayMode", "prayers", "prayerBefore", "prayerAfter", "prayerOffsets", "groupPeriods", "places", "fajrNap",
-            "prayerAlarms", "morningNote", "periodNote", "quranLinks", "weeklyRoutine", "viewStyle", "viewPages")
+            "prayerAlarms", "morningNote", "periodNote", "quranLinks", "weeklyRoutine", "viewStyle", "viewPages", "sportByWeek", "pausedGoals", "recordStyle")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -436,6 +442,9 @@ data class Settings(
                 quranLinks = parseLinks(m["quranLinks"]),
                 weeklyRoutine = runCatching { org.json.JSONArray(m["weeklyRoutine"] ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } }.getOrDefault(emptySet()),
                 viewStyle = m["viewStyle"] ?: "charts", viewPages = jsonMap(m["viewPages"]) { it },
+                sportByWeek = m["sportByWeek"] != "0",
+                pausedGoals = runCatching { org.json.JSONArray(m["pausedGoals"] ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } }.getOrDefault(emptySet()),
+                recordStyle = m["recordStyle"] ?: "both",
             ).also { Cat.groups = it.groups }
         }
     }
@@ -667,6 +676,13 @@ class Repository(private val context: Context) {
         if (store.meta("seed-v5") == null) { seedV5(); store.put(Meta("seed-v5", "1")) }
         // 0.9: the prayer periods become the main way of arranging the day.
         if (store.meta("seed-v6") == null) { store.put(Meta("dayMode", "prayer")); store.put(Meta("seed-v6", "1")) }
+        // 0.16: sessions come from the week plan; automatic sport sessions of the coming days are taken off (today's stay).
+        if (store.meta("seed-v7") == null) {
+            val today = Clock.today().toString()
+            val sportRules = store.allRules().filter { it.category == "sport" }.map { it.id }.toSet()
+            store.allTasks().filter { it.day > today && it.ruleId in sportRules && it.open && !it.running && it.spent == 0L }.forEach { store.delete(it.id) }
+            store.put(Meta("seed-v7", "1"))
+        }
         ensureDayLocked(Clock.today())
         replanLocked()
     }
@@ -946,7 +962,10 @@ class Repository(private val context: Context) {
         val plans = plansLocked()
         val mem = memLastOf(plans)
         val created = mutableListOf<Task>()
+        val byWeek = store.meta("sportByWeek") != "0"
         for (r in store.allRules().filter { (it.active || it.id == only) && (only == null || it.id == only) }) {
+            // Training sessions are placed on days from the week plan, not by their own repeat.
+            if (byWeek && only == null && r.category == "sport") continue
             if (all.any { it.ruleId == r.id && it.day == ds }) continue
             val instLast = all.filter { it.ruleId == r.id && it.state != "skipped" && it.day < ds && (it.done || it.day >= ts) }.maxOfOrNull { it.day }
             val last = listOfNotNull(r.lastDoneDay, instLast).maxOrNull()?.let(LocalDate::parse)
@@ -1066,9 +1085,12 @@ class Repository(private val context: Context) {
                     val (title, cat) = seriesInfoLocked(sr)
                     val week = all[Targets.weekKey(start)]?.get(sr)
                     val text = dayTargets[sr]?.text?.takeIf { it.isNotBlank() }
+                    val rule = store.rule(sr)
                     repeat(want - have.size) {
-                        store.put(Task(title = title + (text?.let { " · $it" } ?: ""), minutes = week?.minutes?.takeIf { it > 0 } ?: 60,
-                            day = ds, category = cat, note = "wk:$sr"))
+                        store.put(Task(title = title + (text?.let { " · $it" } ?: ""), minutes = week?.minutes?.takeIf { it > 0 } ?: rule?.minutes ?: 60,
+                            day = ds, category = cat, note = "wk:$sr",
+                            kind = rule?.kind ?: "task", sport = rule?.sport ?: 0, sets = rule?.sets ?: 0, workSec = rule?.workSec ?: 0,
+                            restSec = rule?.restSec ?: 0, interruptible = rule?.interruptible ?: false, goalId = rule?.goalId))
                     }
                 } else if (have.size > want) {
                     have.filter { it.open && !it.running && it.spent == 0L }.sortedByDescending { it.created }.take(have.size - want).forEach { store.delete(it.id) }
@@ -1278,6 +1300,53 @@ class Repository(private val context: Context) {
         val drop = open.groupBy { it.ruleId to it.phase }.values.filter { it.size > 1 }
             .flatMap { g -> g.sortedWith(compareBy({ if (it.period.isNotEmpty() || it.pinned) 0 else 1 }, { it.created })).drop(1) }
         if (drop.isNotEmpty()) store.putAll(drop.map { it.copy(state = "skipped", note = if (it.note.startsWith("grp:")) it.note else "مكرر") })
+    }
+
+    // ---------- records and training sessions ----------
+
+    /** Saves a record (new or edited). A new current value is logged. */
+    suspend fun saveRecord(g: Goal) = lock.withLock {
+        val old = store.goal(g.id)
+        store.put(g)
+        if (old == null || old.current != g.current) store.put(GoalLog(goalId = g.id, day = Clock.today().toString(), value = g.current))
+    }
+
+    suspend fun deleteRecord(id: String) = lock.withLock {
+        store.deleteGoal(id)
+        // Exercises that pointed to it stay in their sessions, just without a record.
+        store.allRules().filter { r -> Members.parse(r.members).any { it.goal == id } || r.goalId == id }.forEach { r ->
+            val members = Members.parse(r.members).map { if (it.goal == id) it.copy(goal = null) else it }
+            store.put(r.copy(members = Members.encode(members), goalId = if (r.goalId == id) members.firstOrNull { it.goal != null }?.goal else r.goalId))
+        }
+    }
+
+    suspend fun setPaused(id: String, paused: Boolean) = lock.withLock {
+        val set = runCatching { org.json.JSONArray(store.meta("pausedGoals") ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) } } }.getOrDefault(emptyList()).toMutableSet()
+        if (paused) set += id else set -= id
+        store.put(Meta("pausedGoals", org.json.JSONArray(set.toList()).toString()))
+    }
+
+    /** Saves a training session with its exercises; its length and sets follow from them. */
+    suspend fun saveSession(r: Rule, members: List<Exercise>) = lock.withLock {
+        val sh = Members.session(members)
+        store.put(r.copy(members = Members.encode(members), minutes = if (members.isEmpty()) r.minutes else sh.minutes, sets = sh.sets, workSec = sh.workSec,
+            restSec = sh.restSec, goalId = members.firstOrNull { it.goal != null }?.goal ?: r.goalId, kind = "training", category = "sport"))
+        // Planned sessions not started yet take the new shape.
+        store.allTasks().filter { (it.ruleId == r.id || it.note == "wk:${r.id}") && it.open && !it.running && it.spent == 0L && it.day >= Clock.today().toString() }
+            .forEach { t -> store.put(t.copy(minutes = if (members.isEmpty()) t.minutes else sh.minutes, sets = sh.sets, workSec = sh.workSec, restSec = sh.restSec, sport = r.sport)) }
+        replanLocked()
+    }
+
+    suspend fun deleteSession(id: String) = lock.withLock {
+        store.deleteRule(id)
+        store.allTasks().filter { (it.ruleId == id || it.note == "wk:$id") && it.open && !it.running && it.spent == 0L }.forEach { store.delete(it.id) }
+        replanLocked()
+    }
+
+    /** Routine on or off for a task's series (from a long press in day planning); the task stays where it is. */
+    suspend fun setRoutine(series: String, on: Boolean) = lock.withLock {
+        val r = JSONObject(store.meta("routine")?.takeIf { it.isNotBlank() } ?: "{}").put(series, on)
+        store.put(Meta("routine", r.toString()))
     }
 
     suspend fun refreshWidget() = lock.withLock {

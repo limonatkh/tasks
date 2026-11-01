@@ -535,7 +535,9 @@ fun GoalChainSheet(s: Snapshot, series: String, close: () -> Unit, openWeek: () 
  * (or tap it, then tap the period). The filled part of each period shows how much of its time is taken.
  */
 @Composable
-fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String, String) -> Unit, confirm: () -> Unit, details: (Task) -> Unit) {
+fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String, String) -> Unit, confirm: () -> Unit, details: (Task) -> Unit,
+                 routine: (Task, Boolean) -> Unit = { _, _ -> }) {
+    var askRoutine by remember { mutableStateOf<Task?>(null) }
     val ds = day.toString()
     val tasks = s.tasks.filter { it.day == ds && it.state != "skipped" }
     val rules = s.ruleMap
@@ -629,7 +631,7 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                         // Routine tasks stay where they are; say so instead of doing nothing.
                         detectTapGestures(
                             onTap = { locked = t },
-                            onLongPress = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); locked = t },
+                            onLongPress = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); askRoutine = t },
                         )
                     } else Modifier
                         .pointerInput(t.id, t.period) {
@@ -637,7 +639,13 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { off -> if (!byHandle) begin(off) },
                                 onDrag = { change, amount -> if (!byHandle) { change.consume(); dragDelta += amount } },
-                                onDragEnd = { if (!byHandle) end() }, onDragCancel = { if (!byHandle) dragging = null },
+                                onDragEnd = {
+                                    if (!byHandle) {
+                                        // Held without moving: ask about routine instead of moving it.
+                                        if (dragDelta.getDistance() < 24f) { dragging = null; askRoutine = t } else end()
+                                    }
+                                },
+                                onDragCancel = { if (!byHandle) dragging = null },
                             )
                         }
                         .pointerInput(t.id, t.period, "handle") {
@@ -675,7 +683,7 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("ترتيب ${if (day == s.today) "اليوم" else if (day == s.today.plusDays(1)) "بكرا" else dayLabel(day)}", style = MaterialTheme.typography.titleLarge)
-                            Muted("اسحب المهمة من ⠿ لفترة، أو امسكها شوي واسحبها. 🔒 روتين ثابت.")
+                            Muted("اسحب من ⠿ لفترة. ضغطة طويلة بدون تحريك: روتين أو لا. 🔒 روتين ثابت.")
                         }
                         IconButton(onClick = close) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
                     }
@@ -755,6 +763,16 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                 }
             }
         }
+    }
+    askRoutine?.let { t ->
+        val isR = isRoutine(t, rules, s.settings)
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { askRoutine = null },
+            title = { Text(t.title) },
+            text = { Text(if (isR) "هاي روتين ثابت بفترته. بدك تبطّلها روتين عشان تقدر تحركها؟" else "بدك تخليها روتين؟ بتضل بمكانها وبتصير ثابتة، وكل مرة بتيجي بنفس الفترة.") },
+            confirmButton = { TextButton(onClick = { routine(t, !isR); askRoutine = null }) { Text(if (isR) "بطّل روتين" else "خليها روتين") } },
+            dismissButton = { TextButton(onClick = { askRoutine = null }) { Text("إلغاء") } },
+        )
     }
 }
 

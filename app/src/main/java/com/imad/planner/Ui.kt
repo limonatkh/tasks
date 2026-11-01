@@ -482,6 +482,7 @@ fun TaskBadge(look: String?, color: Color?, size: Dp = 26.dp) {
     val c = color ?: MaterialTheme.colorScheme.primary
     val icon = iconOf(look)
     when {
+        look != null && look.startsWith("s:") -> SportIcon(look.removePrefix("s:"), c, size)
         icon != null -> androidx.compose.material3.Icon(icon, contentDescription = null, tint = c, modifier = Modifier.size(size))
         look != null && look.startsWith("t:") -> Text(look.removePrefix("t:"), color = c, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.62f).sp, maxLines = 1)
     }
@@ -501,6 +502,14 @@ fun IconPicker(selected: String?, color: Color?, pick: (String) -> Unit) {
                 contentAlignment = Alignment.Center) {
                 androidx.compose.material3.Icon(v, contentDescription = k, tint = color ?: MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
             }
+        }
+    }
+    Text("رياضة", style = MaterialTheme.typography.labelLarge)
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SportIcons.all.forEach { (k, _) ->
+            val on = selected == "s:$k"
+            Box(Modifier.size(40.dp).background(if (on) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp)).clickable { pick("s:$k") },
+                contentAlignment = Alignment.Center) { SportIcon(k, color ?: MaterialTheme.colorScheme.onSurface, 28.dp) }
         }
     }
     Field(abbr, "أو اختصار (حرفين أو ثلاثة)", { v -> abbr = v.take(4); if (abbr.isNotBlank()) pick("t:" + abbr.trim()) })
