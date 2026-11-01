@@ -100,7 +100,7 @@ fun DrawScope.drawSport(key: String, color: Color) {
             k.line(12f, 8f, 8f, 8f); k.line(12f, 8f, 16f, 8f); k.bar(3.5f, 20.5f, 7.5f) }
         "pushup", "knuckle" -> { k.line(2f, 20f, 22f, 20f); k.head(5f, 10.5f); k.line(7f, 12f, 20f, 17.5f); k.line(9f, 13f, 9f, 19f)
             if (key == "knuckle") k.head(9f, 19f, 1.5f) }
-        "pullup", "weightedpull" -> { k.line(3f, 3f, 21f, 3f); k.line(9f, 3f, 10f, 8f, 12f, 10f); k.line(15f, 3f, 14f, 8f, 12f, 10f); k.head(12f, 7.5f, 1.9f)
+        "pullup", "weightedpull" -> { k.line(3f, 3f, 21f, 3f); k.line(8f, 3f, 9f, 9f, 12f, 10.5f); k.line(16f, 3f, 15f, 9f, 12f, 10.5f); k.head(12f, 7f, 1.9f)
             k.line(12f, 10f, 12f, 16f); k.line(12f, 16f, 10.5f, 21f); k.line(12f, 16f, 13.5f, 21f)
             if (key == "weightedpull") k.ring(12f, 19.5f, 2.6f) }
         "dips" -> { k.line(5f, 12f, 5f, 22f); k.line(19f, 12f, 19f, 22f); k.line(3.5f, 12f, 7.5f, 12f); k.line(16.5f, 12f, 20.5f, 12f)
@@ -123,7 +123,7 @@ fun DrawScope.drawSport(key: String, color: Color) {
             k.line(10f, 8f, 6.5f, 4f); k.line(10f, 8f, 13.5f, 4f); k.line(4f, 22f, 16f, 22f); k.arrow(19.5f, 21f, 19.5f, 3f) }
         "boxjump" -> { k.box(11f, 14f, 10f, 8f, fill = false, r = 0.8f); k.line(2f, 22f, 22f, 22f)
             k.head(9f, 4f); k.line(9f, 6.5f, 9f, 10.5f); k.line(9f, 10.5f, 13f, 12f); k.line(9f, 10.5f, 7f, 13.5f); k.line(9f, 7.5f, 5f, 9f); k.line(9f, 7.5f, 12f, 5f) }
-        "boxing" -> { k.box(5f, 4f, 12f, 11f, r = 4.5f); k.box(6f, 14f, 9f, 5f, fill = false, r = 1f); k.ring(17.5f, 10f, 2.5f) }
+        "boxing" -> { k.box(7f, 2.5f, 12f, 13f, r = 5.5f); k.head(6.5f, 10.5f, 3f); k.box(8.5f, 16f, 9f, 5.5f, fill = false, r = 1.2f); k.line(9f, 7f, 15f, 7f) }
         "armwrestle" -> { k.line(2f, 18f, 22f, 18f); k.line(4f, 18f, 9f, 13f, 11f, 6f); k.line(20f, 18f, 15f, 13f, 13f, 6f); k.head(12f, 5f, 2.4f) }
         "dumbbell" -> { k.line(6f, 12f, 18f, 12f); k.box(3f, 7.5f, 3f, 9f, r = 1f); k.box(18f, 7.5f, 3f, 9f, r = 1f) }
         "kettlebell" -> { k.ring(12f, 15f, 6.5f); k.curve(8f, 10f, 8f, 3f, 12f, 3f); k.curve(16f, 10f, 16f, 3f, 12f, 3f) }
