@@ -105,8 +105,9 @@ fun WeekBars(labels: List<String>, bars: List<List<Seg>>, selected: Int?, onSele
                 val left = cx - bw / 2
                 val top = size.height - h
                 val path = Path().apply {
-                    addRoundRect(RoundRect(left, top, left + bw, size.height,
-                        topLeft = CornerRadius(bw / 2), topRight = CornerRadius(bw / 2), bottomLeft = CornerRadius.Zero, bottomRight = CornerRadius.Zero))
+                    addRoundRect(RoundRect(left = left, top = top, right = left + bw, bottom = size.height,
+                        topLeftCornerRadius = CornerRadius(bw / 2), topRightCornerRadius = CornerRadius(bw / 2),
+                        bottomRightCornerRadius = CornerRadius.Zero, bottomLeftCornerRadius = CornerRadius.Zero))
                 }
                 clipPath(path) {
                     var y = size.height
