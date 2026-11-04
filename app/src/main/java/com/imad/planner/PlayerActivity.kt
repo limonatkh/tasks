@@ -133,7 +133,8 @@ class PlayerActivity : ComponentActivity() {
         setBackgroundColor(android.graphics.Color.BLACK)
         webChromeClient = WebChromeClient()
         addJavascriptInterface(bridge, "Android")
-        loadDataWithBaseURL("https://com.imad.planner", page(link!!), "text/html", "utf-8", null)
+        if (intent.getBooleanExtra("test", false)) loadDataWithBaseURL("https://com.imad.planner", "<html><body style='margin:0;background:#c00;color:#fff;font-size:40px'>WEBVIEW OK<video id=v style='width:100%' muted autoplay loop playsinline src='https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'></video></body></html>", "text/html", "utf-8", null)
+        else loadDataWithBaseURL("https://com.imad.planner", page(link!!), "text/html", "utf-8", null)
         web = this
     }
 

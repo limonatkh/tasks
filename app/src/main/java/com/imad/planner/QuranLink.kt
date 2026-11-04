@@ -48,6 +48,10 @@ data class QuranLink(val mode: String, val wardId: String, val wardName: String,
 
 data class Ward(val id: String, val name: String, val mode: String)
 
+/** One stay in the Quran app, from entering to leaving, with what was done in it. */
+data class QuranSession(val id: String, val wardId: String, val mode: String, val start: Long, val end: Long, val totals: QuranTotals,
+                        val taskId: String = "", val wardName: String = "")
+
 /** Totals of one activity (whole day or one ward). Opening a page is never counted as reading. */
 data class QuranTotals(
     val readAyahs: Int = 0, val readPages: Int = 0, val memorizedAyahs: Int = 0,
@@ -119,6 +123,18 @@ object QuranAdapter {
     fun report(context: Context, day: String): Pair<QuranState, QuranReport?> {
         val (st, o) = query(context, QuranContract.PATH_REPORT, mapOf("day" to day))
         return st to o?.let { parseReport(it, System.currentTimeMillis()) }
+    }
+
+    /** The day's closed sessions (each sent when the user leaves the Quran app). */
+    fun sessions(context: Context, day: String): Pair<QuranState, List<QuranSession>> {
+        val (st, o) = query(context, QuranContract.PATH_SESSIONS, mapOf("day" to day))
+        val a = o?.optJSONArray("sessions") ?: return st to emptyList()
+        return st to (0 until a.length()).mapNotNull { i ->
+            val s = a.getJSONObject(i)
+            val id = s.optString("session_id").ifBlank { return@mapNotNull null }
+            QuranSession(id, s.optString("ward_id"), s.optString("mode", "read"), s.optLong("started_at"), s.optLong("ended_at"),
+                totals(s), s.optString("task_id"), s.optString("name"))
+        }
     }
 
     fun totals(o: JSONObject?) = QuranTotals(

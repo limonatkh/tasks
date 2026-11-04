@@ -1275,7 +1275,9 @@ class Repository(private val context: Context) {
         val today = Clock.today().toString()
         val (st, rep) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { QuranAdapter.report(context, today) }
         val wards = if (st == QuranState.OK) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { QuranAdapter.wards(context) } else st to emptyList()
+        val sessions = if (st == QuranState.OK) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { QuranAdapter.sessions(context, today).second } else emptyList()
         locked {
+            if (sessions.isNotEmpty()) runCatching { applySessionsLocked(sessions, wards.second) }
             store.put(Meta("quranState", st.name))
             if (rep != null) {
                 val old = store.meta("quran:$today")?.let { runCatching { QuranAdapter.parseReport(JSONObject(it), 0) }.getOrNull() }
@@ -1296,6 +1298,67 @@ class Repository(private val context: Context) {
             }
         }
         return st
+    }
+
+    /**
+     * Each new session from the Quran app records itself: the task linked to its ward opens and finishes at the
+     * session's own times, moves to the period it was really done in, and takes the amount done. Partly done
+     * stays open with the rest. A session with no task today becomes an extra done task ("قراءة إضافية").
+     * Session ids are kept, so a session is never counted twice.
+     */
+    private suspend fun applySessionsLocked(sessions: List<QuranSession>, wards: List<Ward>) {
+        val seen = runCatching { org.json.JSONArray(store.meta("quranSeen") ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) } } }.getOrDefault(emptyList())
+        val fresh = sessions.filter { it.id !in seen && it.end > 0 }.sortedBy { it.start }
+        if (fresh.isEmpty()) return
+        val s = settingsLocked()
+        val today = Clock.today()
+        val ts = today.toString()
+        for (q in fresh) {
+            val (amount, unit) = QuranAdapter.mainNumber(q.mode, q.totals)
+            if (amount <= 0 && q.totals.listenSeconds <= 0) continue
+            val series = s.quranLinks.filter { it.value.wardId == q.wardId }.keys
+            val dur = (q.end - q.start).coerceAtLeast(60_000L)
+            val period = s.periodAt(today, Clock.minuteOfDay(q.start))
+            val todays = store.tasksOn(ts).filter { it.open && seriesOf(it) in series }
+            val t = todays.firstOrNull { it.id == q.taskId } ?: todays.firstOrNull { it.running }
+                ?: todays.minByOrNull { if (it.planned > 0) kotlin.math.abs(it.planned - q.start) else Long.MAX_VALUE / 2 }
+            val plans = plansLocked()
+            val mem = memLastOf(plans)
+            if (t != null) {
+                val spent = t.spent + dur
+                val units = if (t.isPlan) t.doneUnits + amount else t.doneUnits
+                val full = !t.isPlan || t.units <= 0 || units >= t.units
+                store.put(Event(taskId = t.id, series = seriesOf(t), day = t.day, at = q.start, type = "start", text = "من تطبيق المصحف",
+                    delayMin = if (t.planned > 0) ((q.start - t.planned) / 60_000).toInt() else 0))
+                store.put(t.copy(
+                    state = if (full) "done" else "planned", spent = spent, started = 0, finishedAt = if (full) q.end else t.finishedAt,
+                    doneUnits = units, period = period, planned = if (full) q.start else t.planned, pinned = if (full) true else t.pinned,
+                    minutes = if (full) maxOf(1, (spent / 60_000).toInt()) else t.minutes,
+                ))
+                store.put(Event(taskId = t.id, series = seriesOf(t), day = t.day, at = q.end, type = if (full) "finish" else "pause",
+                    text = "$amount $unit" + if (!full) " من ${t.units}" else ""))
+                if (t.isPlan && amount > 0) savePlansLocked(plans.map { p ->
+                    if ("plan-${p.id}" != t.ruleId) p else PlanMath.applyUnits(p, amount, mem).let { np -> if (np.dayKey == t.day) np.copy(dayDone = np.dayDone + amount) else np }
+                })
+                if (full) t.ruleId?.let { rid -> store.rule(rid)?.let { store.put(it.copy(lastDoneDay = maxOf(t.day, it.lastDoneDay ?: ""))) } }
+            } else {
+                // Not on today's list: an extra one, still counted to the ward's plan.
+                val name = q.wardName.ifBlank { wards.firstOrNull { it.id == q.wardId }?.name ?: QuranContract.modeName(q.mode) }
+                val title = when (q.mode) { "memorize" -> "حفظ إضافي"; "review" -> "مراجعة إضافية"; else -> "قراءة إضافية" } + " · $name"
+                val planSeries = series.firstOrNull { it.startsWith("plan-") }
+                val x = Task(title = "$title ($amount $unit)", minutes = maxOf(1, (dur / 60_000).toInt()), planned = q.start, day = ts, state = "done",
+                    spent = dur, pinned = true, finishedAt = q.end, category = "quran", period = period, note = "ser:quranx:${planSeries ?: q.wardId}")
+                store.put(x)
+                store.put(Event(taskId = x.id, series = seriesOf(x), day = ts, at = q.start, type = "start", text = "من تطبيق المصحف"))
+                store.put(Event(taskId = x.id, series = seriesOf(x), day = ts, at = q.end, type = "finish", text = "$amount $unit"))
+                if (planSeries != null && amount > 0) savePlansLocked(plans.map { p ->
+                    if ("plan-${p.id}" != planSeries) p else PlanMath.applyUnits(p, amount, mem).let { np -> if (np.dayKey == ts) np.copy(dayDone = np.dayDone + amount) else np }
+                })
+            }
+        }
+        val all = (seen + fresh.map { it.id }).takeLast(500)
+        store.put(Meta("quranSeen", org.json.JSONArray(all).toString()))
+        replanLocked()
     }
 
     private fun reportJson(r: QuranReport): String {

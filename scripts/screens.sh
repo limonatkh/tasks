@@ -18,6 +18,10 @@ go month; shot 05-month
 adb shell input swipe 540 1900 540 600 400; shot 05b-month-scroll 2
 go week; shot 06-week
 go ig; shot 07-ig-feed
+# Does the WebView draw at all in the player screen (red page + a plain HTML5 video)?
+adb shell am start -S -n $P/.PlayerActivity --es series t0 --es title test --es list x --ez test true
+shot 00-webview-test 12
+adb shell input keyevent BACK
 # A public playlist in the full-screen player.
 adb shell am start -n $P/.PlayerActivity --es series test --es title "تجربة" --es list PLlrxD0HtieHhS8VzuMCfQD4uJ9yne1mE6 --ei index 0 --ei pos 30
 shot 08-player 20
@@ -28,7 +32,7 @@ adb emu rotate; adb emu rotate; adb emu rotate; sleep 2
 adb shell input keyevent BACK
 # The IFrame API's own demo video, which allows embedding.
 adb shell am start -S -n $P/.PlayerActivity --es series test2 --es title فيديو --es list "v:M7lc1UVf-VE" --ei index 0 --ei pos 10
-shot 14-player-embeddable 8
+shot 14-player-embeddable 12
 adb shell dumpsys activity activities | grep -i "resumed" > shots/resumed.txt
 adb logcat -d -t 300 > shots/logcat-player.txt
 shot 14b-player-embeddable 6
