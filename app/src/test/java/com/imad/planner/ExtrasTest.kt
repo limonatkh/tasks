@@ -26,3 +26,12 @@ class ExtrasTest {
         assertEquals(1, YearPart.partOfMonth(parts, 11))
     }
 }
+
+class IgTest {
+    @Test fun usernameFromLinks() {
+        assertEquals("some.one", Ig.username("https://www.instagram.com/some.one/?igsh=abc"))
+        assertEquals("some_one", Ig.username("@Some_One"))
+        assertEquals("abc", Ig.username("https://instagram.com/stories/abc/123"))
+        assertNull(Ig.username("https://www.instagram.com/explore/"))
+    }
+}

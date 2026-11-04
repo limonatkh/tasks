@@ -1316,6 +1316,16 @@ class Repository(private val context: Context) {
         if (drop.isNotEmpty()) store.putAll(drop.map { it.copy(state = "skipped", note = if (it.note.startsWith("grp:")) it.note else "مكرر") })
     }
 
+    // ---------- people followed without opening Instagram ----------
+
+    suspend fun setIgPeople(list: List<String>) = locked { store.put(Meta("igPeople", Ig.encode(list.distinct()))) }
+
+    suspend fun igSeen(person: String) = locked {
+        val key = "igSeen:${Clock.today()}"
+        val l = Ig.parse(store.meta(key))
+        store.put(Meta(key, Ig.encode(if (person in l) l - person else l + person)))
+    }
+
     // ---------- YouTube playlists ----------
 
     suspend fun setYt(series: String, link: YtLink?) = locked {
@@ -2051,7 +2061,7 @@ class Repository(private val context: Context) {
         val logs = JSONArray()
         store.allLogs().forEach { l -> logs.put(JSONObject().put("id", l.id).put("goalId", l.goalId).put("day", l.day).put("value", l.value)) }
         val meta = JSONObject()
-        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets", "routineWeeks")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
+        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets", "routineWeeks", "igPeople")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
         store.allMeta().filter { it.key.startsWith("pomo:") || it.key.startsWith("dayPlanned:") || it.key.startsWith("quran:") }.forEach { meta.put(it.key, it.value) }
         val events = JSONArray()
         store.allEvents().forEach { e ->

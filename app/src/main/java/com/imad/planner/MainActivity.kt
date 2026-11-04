@@ -199,6 +199,7 @@ class Nav(
     val sports: () -> Unit = {},
     val continueLater: (Task) -> Unit = {},
     val yearParts: (YearTarget) -> Unit = {},
+    val ig: () -> Unit = {},
 )
 
 @Composable
@@ -255,6 +256,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     var splitFor by remember { mutableStateOf<Task?>(null) }
     var contFor by remember { mutableStateOf<Task?>(null) }
     var partsFor by remember { mutableStateOf<YearTarget?>(null) }
+    var igOpen by remember { mutableStateOf(false) }
     var moveDayFor by remember { mutableStateOf<Task?>(null) }
     var closeDay by remember { mutableStateOf(false) }
     var restoreText by remember { mutableStateOf<String?>(null) }
@@ -409,6 +411,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         sports = { sportsOpen = true },
         continueLater = { contFor = it },
         yearParts = { partsFor = it },
+        ig = { igOpen = true },
         syncQuran = { act { val st = repo.syncQuran(); if (st != QuranState.OK) snackbar.showSnackbar(st.text) } },
         look = { series, color, icon -> act { repo.setLook(series, color, icon) } },
     )
@@ -557,6 +560,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         set = { k, v -> act { repo.setSetting(k, v) } },
         weekPlan = { weekPlan = true },
     ))
+    if (igOpen) IgSheet(snap, close = { igOpen = false }, save = { l -> act { repo.setIgPeople(l) } }, seen = { p -> act { repo.igSeen(p) } })
     ytFor?.let { t -> YtLinkDialog(t, snap.settings.ytLinks[seriesOf(t)], close = { ytFor = null }) { l -> act { repo.setYt(seriesOf(t), l) } } }
     ytPlay?.let { t ->
         snap.settings.ytLinks[seriesOf(t)]?.let { l ->
