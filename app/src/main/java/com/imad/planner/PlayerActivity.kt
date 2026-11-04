@@ -150,7 +150,8 @@ class PlayerActivity : ComponentActivity() {
         return if (l.list.startsWith("v:")) {
             val ids = l.list.removePrefix("v:").split(",").filter { it.isNotBlank() }
             val first = ids.getOrElse(l.index) { ids.first() }
-            "https://www.youtube.com/embed/$first?playlist=${ids.drop(l.index + 1).joinToString(",")}&$common"
+            val rest = ids.drop(l.index + 1)
+            "https://www.youtube.com/embed/$first?" + (if (rest.isNotEmpty()) "playlist=${rest.joinToString(",")}&" else "") + common
         } else "https://www.youtube.com/embed/videoseries?list=${l.list}&index=${l.index}&$common"
     }
 
