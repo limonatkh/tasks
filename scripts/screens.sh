@@ -31,7 +31,7 @@ adb shell input keyevent BACK
 adb shell am start -n $P/.IgLoginActivity; shot 16-ig-login 15
 adb shell input keyevent BACK; adb shell input keyevent BACK
 # A public playlist in the full-screen player.
-adb shell am start -n $P/.PlayerActivity --es series test --es title "تجربة" --es list PLlrxD0HtieHhS8VzuMCfQD4uJ9yne1mE6 --ei index 0 --ei pos 30
+adb shell am start -n $P/.PlayerActivity --es series test --es title "تجربة" --es list PLlrxD0HtieHhS8VzuMCfQD4uJ9yne1mE6 --ei index 4 --ei pos 60
 shot 08-player 20
 adb shell input tap 540 1200; shot 09-player-controls 1
 adb emu rotate; shot 10-player-landscape 6

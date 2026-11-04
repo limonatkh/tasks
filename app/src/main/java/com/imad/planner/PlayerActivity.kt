@@ -105,6 +105,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private var last: YtLink? = null
+    private fun currentLink(): YtLink = last ?: link!!
 
     private fun keep(l: YtLink) {
         last = l
@@ -138,8 +139,9 @@ class PlayerActivity : ComponentActivity() {
         if (intent.getBooleanExtra("test", false)) { loadDataWithBaseURL("https://com.imad.planner", "<html><body style='margin:0;background:#c00;color:#fff;font-size:40px'>WEBVIEW OK</body></html>", "text/html", "utf-8", null); web = this; return@apply }
         // YouTube's own embed page is the whole page (no frame inside our page), so its picture is drawn like any page.
         webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView, url: String) { view.evaluateJavascript(HOOK, null) }
-            override fun shouldOverrideUrlLoading(view: WebView, r: WebResourceRequest) = true
+            override fun onPageFinished(view: WebView, url: String) { view.evaluateJavascript(hook(currentLink()), null) }
+            // Only YouTube's own pages may load here (the mobile page is the fallback for blocked embeds).
+            override fun shouldOverrideUrlLoading(view: WebView, r: WebResourceRequest) = r.url.host?.endsWith("youtube.com") != true
         }
         loadUrl(embedUrl(link!!), mapOf("Referer" to "https://com.imad.planner/"))
         web = this
@@ -257,15 +259,32 @@ private fun RoundButton(label: String, size: Int, onClick: () -> Unit) {
     }
 }
 
-/** Runs inside YouTube's embed page: names its player `player` and reports to the app every second. */
-private val HOOK = """
+/**
+ * Runs inside YouTube's page (the embed page, or the mobile watch page when the owner blocks embedding):
+ * names its player `player`, goes to the saved episode and second first, and only then reports every second,
+ * so a fresh start never overwrites where the user had reached.
+ */
+private fun hook(l: YtLink) = """
 (function(){
   if (window.__hooked) return; window.__hooked = true;
+  var T = ${l.index}, P = ${l.pos}, LIST = '${if (l.list.startsWith("v:")) "" else l.list}';
+  var mobile = location.host.indexOf('m.youtube') >= 0;
   var st = document.createElement('style');
-  st.textContent = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-pause-overlay,.ytp-watermark,.ytp-ce-element,.ytp-endscreen-content,.ytp-show-cards-title,.ytp-paid-content-overlay{display:none!important}';
-  document.head.appendChild(st);
-  window.__ended = -1;
-  window.__err = function(e){ try{ Android.error(e && e.data !== undefined ? e.data : e); }catch(x){} };
+  st.textContent = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-pause-overlay,.ytp-watermark,.ytp-ce-element,.ytp-endscreen-content,.ytp-show-cards-title,.ytp-paid-content-overlay{display:none!important}' +
+    (mobile ? 'html,body{background:#000!important;overflow:hidden!important}ytm-mobile-topbar-renderer,header,ytm-pivot-bar-renderer,ytm-item-section-renderer,ytm-single-column-watch-next-results-renderer,ytm-watch-metadata-app-promo-renderer,ytm-companion-slot,.mobile-topbar-header,.watch-below-the-player,ytm-engagement-panel{display:none!important}#player-container-id,#player-container,#player,.player-container,#movie_player,#movie_player video{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:99999!important;background:#000!important}video{object-fit:contain!important}' : '');
+  (document.head || document.documentElement).appendChild(st);
+  var reached = mobile || T <= 0, jumped = false, ended = -1;
+  window.__err = function(e){
+    var code = (e && e.data !== undefined) ? e.data : e;
+    var p = window.player;
+    if (!mobile && (code == 101 || code == 150) && p) {
+      // Embedding is blocked by the owner: the same episode plays from YouTube's mobile page instead.
+      var pl = p.getPlaylist ? p.getPlaylist() : null, i = p.getPlaylistIndex ? p.getPlaylistIndex() : 0;
+      var id = (pl && pl[i]) || (p.getVideoData && p.getVideoData().video_id);
+      if (id) { var t = reached ? Math.floor(p.getCurrentTime() || 0) : P; location.href = 'https://m.youtube.com/watch?v=' + id + (LIST ? '&list=' + LIST : '') + '&t=' + t + 's'; return; }
+    }
+    try { Android.error(code); } catch(x){}
+  };
   setInterval(function(){
     var p = document.getElementById('movie_player');
     if (!p || !p.getCurrentTime) return;
@@ -273,9 +292,17 @@ private val HOOK = """
     if (!window.__ev) { window.__ev = true; try { p.addEventListener('onError', '__err'); } catch(x){} }
     try {
       var pl = p.getPlaylist ? p.getPlaylist() : null, i = p.getPlaylistIndex ? p.getPlaylistIndex() : 0, s = p.getPlayerState();
+      if (!reached) {
+        if (!pl || !pl.length) return;
+        if (i !== T && T < pl.length) { if (!jumped) { jumped = true; p.playVideoAt(T); } return; }
+        reached = true;
+        if (P > 3) p.seekTo(P, true);
+        return;
+      }
+      if (mobile && i < 0) i = T;
       Android.progress(i < 0 ? 0 : i, p.getCurrentTime(), p.getDuration(), pl ? pl.length : 0, s);
-      if (s === 0 && window.__ended !== i) { window.__ended = i; Android.ended(i < 0 ? 0 : i, pl ? pl.length : 0); }
-      if (s !== 0) window.__ended = -1;
+      if (s === 0 && ended !== i) { ended = i; Android.ended(i < 0 ? 0 : i, pl ? pl.length : 0); }
+      if (s !== 0) ended = -1;
     } catch(x){}
   }, 1000);
 })();

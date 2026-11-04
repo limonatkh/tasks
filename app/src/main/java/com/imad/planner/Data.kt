@@ -1277,6 +1277,8 @@ class Repository(private val context: Context) {
         val wards = if (st == QuranState.OK) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { QuranAdapter.wards(context) } else st to emptyList()
         val sessions = if (st == QuranState.OK) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { QuranAdapter.sessions(context, today).second } else emptyList()
         locked {
+            // Extras saved as "0 آية" by 0.22 (a listening-only session) are taken away.
+            store.tasksOn(today).filter { it.note.startsWith("ser:quranx") && it.title.contains("(0 ") }.forEach { store.delete(it.id) }
             if (sessions.isNotEmpty()) runCatching { applySessionsLocked(sessions, wards.second) }
             store.put(Meta("quranState", st.name))
             if (rep != null) {
@@ -1314,8 +1316,11 @@ class Repository(private val context: Context) {
         val today = Clock.today()
         val ts = today.toString()
         for (q in fresh) {
-            val (amount, unit) = QuranAdapter.mainNumber(q.mode, q.totals)
-            if (amount <= 0 && q.totals.listenSeconds <= 0) continue
+            val (amount, unit0) = QuranAdapter.mainNumber(q.mode, q.totals)
+            if (amount <= 0 && q.totals.listenSeconds < 60) continue
+            val listenOnly = amount <= 0
+            val unit = if (listenOnly) "د سماع" else unit0
+            val shown = if (listenOnly) q.totals.listenSeconds / 60 else amount
             val series = s.quranLinks.filter { it.value.wardId == q.wardId }.keys
             val dur = (q.end - q.start).coerceAtLeast(60_000L)
             val period = s.periodAt(today, Clock.minuteOfDay(q.start))
@@ -1336,7 +1341,7 @@ class Repository(private val context: Context) {
                     minutes = if (full) maxOf(1, (spent / 60_000).toInt()) else t.minutes,
                 ))
                 store.put(Event(taskId = t.id, series = seriesOf(t), day = t.day, at = q.end, type = if (full) "finish" else "pause",
-                    text = "$amount $unit" + if (!full) " من ${t.units}" else ""))
+                    text = "$shown $unit" + if (!full) " من ${t.units}" else ""))
                 if (t.isPlan && amount > 0) savePlansLocked(plans.map { p ->
                     if ("plan-${p.id}" != t.ruleId) p else PlanMath.applyUnits(p, amount, mem).let { np -> if (np.dayKey == t.day) np.copy(dayDone = np.dayDone + amount) else np }
                 })
@@ -1344,13 +1349,13 @@ class Repository(private val context: Context) {
             } else {
                 // Not on today's list: an extra one, still counted to the ward's plan.
                 val name = q.wardName.ifBlank { wards.firstOrNull { it.id == q.wardId }?.name ?: QuranContract.modeName(q.mode) }
-                val title = when (q.mode) { "memorize" -> "حفظ إضافي"; "review" -> "مراجعة إضافية"; else -> "قراءة إضافية" } + " · $name"
+                val title = (if (listenOnly) "سماع إضافي" else when (q.mode) { "memorize" -> "حفظ إضافي"; "review" -> "مراجعة إضافية"; else -> "قراءة إضافية" }) + " · $name"
                 val planSeries = series.firstOrNull { it.startsWith("plan-") }
-                val x = Task(title = "$title ($amount $unit)", minutes = maxOf(1, (dur / 60_000).toInt()), planned = q.start, day = ts, state = "done",
+                val x = Task(title = "$title ($shown $unit)", minutes = maxOf(1, (dur / 60_000).toInt()), planned = q.start, day = ts, state = "done",
                     spent = dur, pinned = true, finishedAt = q.end, category = "quran", period = period, note = "ser:quranx:${planSeries ?: q.wardId}")
                 store.put(x)
                 store.put(Event(taskId = x.id, series = seriesOf(x), day = ts, at = q.start, type = "start", text = "من تطبيق المصحف"))
-                store.put(Event(taskId = x.id, series = seriesOf(x), day = ts, at = q.end, type = "finish", text = "$amount $unit"))
+                store.put(Event(taskId = x.id, series = seriesOf(x), day = ts, at = q.end, type = "finish", text = "$shown $unit"))
                 if (planSeries != null && amount > 0) savePlansLocked(plans.map { p ->
                     if ("plan-${p.id}" != planSeries) p else PlanMath.applyUnits(p, amount, mem).let { np -> if (np.dayKey == ts) np.copy(dayDone = np.dayDone + amount) else np }
                 })

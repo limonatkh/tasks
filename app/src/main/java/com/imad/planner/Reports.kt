@@ -137,8 +137,8 @@ fun SwipeRow(start: (() -> Unit)?, defer: (() -> Unit)?, deferMode: String, cont
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = { v ->
             when (v) {
-                SwipeToDismissBoxValue.EndToStart -> start?.invoke()
-                SwipeToDismissBoxValue.StartToEnd -> defer?.invoke()
+                SwipeToDismissBoxValue.StartToEnd -> start?.invoke()
+                SwipeToDismissBoxValue.EndToStart -> defer?.invoke()
                 else -> {}
             }
             false
@@ -150,13 +150,13 @@ fun SwipeRow(start: (() -> Unit)?, defer: (() -> Unit)?, deferMode: String, cont
     var shift by remember { mutableFloatStateOf(0f) }
     SwipeToDismissBox(
         state = state,
-        enableDismissFromEndToStart = start != null,
-        enableDismissFromStartToEnd = defer != null,
+        enableDismissFromStartToEnd = start != null,
+        enableDismissFromEndToStart = defer != null,
         backgroundContent = {
             val dir = state.dismissDirection
             Box(Modifier.fillMaxSize().onGloballyPositioned { baseX = it.positionInRoot().x }) {
                 if (dir == SwipeToDismissBoxValue.Settled || kotlin.math.abs(shift) < 2f) return@Box
-                val toStart = dir == SwipeToDismissBoxValue.EndToStart
+                val toStart = dir == SwipeToDismissBoxValue.StartToEnd
                 if ((toStart && start == null) || (!toStart && defer == null)) return@Box
                 val color = if (toStart) Color(0xFF2E9E5B) else Color(0xFF3D7BF7)
                 Box(
