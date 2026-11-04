@@ -147,7 +147,7 @@ var player;
 function onYouTubeIframeAPIReady(){
   player=new YT.Player('p',{width:'100%',height:'100%',playerVars:{playsinline:1,origin:'https://com.imad.planner',rel:0,autoplay:1,controls:0,modestbranding:1,iv_load_policy:3,fs:0,disablekb:1},
     events:{
-      onReady:function(e){ e.target.loadPlaylist({listType:'playlist',list:'${l.list}',index:${l.index},startSeconds:${l.pos}}); },
+      onReady:function(e){ var L='${l.list}'; if(L.indexOf('v:')===0) e.target.loadPlaylist(L.substring(2).split(','),${l.index},${l.pos}); else e.target.loadPlaylist({listType:'playlist',list:L,index:${l.index},startSeconds:${l.pos}}); },
       onStateChange:function(e){ report(); if(e.data===0){ Android.ended(player.getPlaylistIndex(), (player.getPlaylist()||[]).length); } },
       onError:function(e){ Android.error(e.data); }
     }});
