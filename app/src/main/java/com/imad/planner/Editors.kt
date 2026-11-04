@@ -601,6 +601,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Muted(if (s.prayerMode) "اليوم بينقسم لفترات بين الصلوات، وكل مجموعة إلها فترة (من «المجموعات وأوقاتها»). وقت الصلاة نفسه محجوز. السجل القديم ما بيتغير."
               else "اليوم بيتقسم حسب الساعات فوق (الصباح، الشغل، الرياضة).")
         Secondary("مواقيت الصلاة ومنبهاتها", openPrayers, Modifier.fillMaxWidth())
+        SwitchRow("أهداف أشهر الأرقام القياسية بإيدي بس (بدون اقتراح)", s.manualMonths) { set("manualMonths", if (it) "1" else "0") }
         HorizontalDivider()
         Text("طريقة العرض", style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -698,7 +699,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.17")
+        Muted("الإصدار 0.18")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

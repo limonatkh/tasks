@@ -98,6 +98,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import java.time.YearMonth
 
 class MainActivity : ComponentActivity() {
     private lateinit var repo: Repository
@@ -122,7 +123,9 @@ class MainActivity : ComponentActivity() {
         Alarms.channels(this)
         repo = Repository.get(this)
         lifecycleScope.launch { runCatching { repo.initialize() } }
-        readRoute(intent)
+        // A notification's action runs once: not again when Android restores the screen or it is opened from recent apps.
+        if (savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) readRoute(intent)
+        else intent.removeExtra("startQuran")
         setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 PlannerTheme { Planner(repo, route.value) { route.value = null } }
@@ -194,6 +197,8 @@ class Nav(
     val quran: (Task) -> Unit = {},
     val syncQuran: () -> Unit = {},
     val sports: () -> Unit = {},
+    val continueLater: (Task) -> Unit = {},
+    val yearParts: (YearTarget) -> Unit = {},
 )
 
 @Composable
@@ -209,10 +214,14 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     val metas by repo.store.metas().collectAsState(initial = emptyList())
     val events by repo.store.events().collectAsState(initial = emptyList())
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val metaMap = metas.associate { it.key to it.value }
+    // Parsed once per change of the settings, not on every clock tick.
+    val metaMap = remember(metas) { metas.associate { it.key to it.value } }
+    val parsedPlans = remember(metaMap) { Plans.parse(metaMap["plans"]) }
+    val parsedMonths = remember(metaMap) { Months.parse(metaMap["months"]) }
+    val parsedSettings = remember(metaMap) { Settings.from(metaMap) }
     val snap = Snapshot(
-        tasks, goals, projects, rules, logs, Plans.parse(metaMap["plans"]), Months.parse(metaMap["months"]),
-        Settings.from(metaMap), metaMap["quranAudio"]?.let(Uri::parse), Clock.today(), now, events,
+        tasks, goals, projects, rules, logs, parsedPlans, parsedMonths,
+        parsedSettings, metaMap["quranAudio"]?.let(Uri::parse), Clock.today(), now, events,
         closedToday = metaMap.containsKey("closed:${Clock.today()}"),
         undoLabel = metaMap["undoLabel"].orEmpty(), undoAt = metaMap["undoAt"]?.toLongOrNull() ?: 0, meta = metaMap,
     )
@@ -241,6 +250,11 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     var dayPlan by remember { mutableStateOf<LocalDate?>(null) }
     var chainFor by remember { mutableStateOf<String?>(null) }
     var sportsOpen by remember { mutableStateOf(false) }
+    var ytFor by remember { mutableStateOf<Task?>(null) }
+    var ytPlay by remember { mutableStateOf<Task?>(null) }
+    var splitFor by remember { mutableStateOf<Task?>(null) }
+    var contFor by remember { mutableStateOf<Task?>(null) }
+    var partsFor by remember { mutableStateOf<YearTarget?>(null) }
     var moveDayFor by remember { mutableStateOf<Task?>(null) }
     var closeDay by remember { mutableStateOf(false) }
     var restoreText by remember { mutableStateOf<String?>(null) }
@@ -260,10 +274,13 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     }
 
     // Live clock; re-plan every minute so unstarted tasks flow forward with time.
+    // The clock ticks every second only while a timer runs; otherwise twice a minute (the screen redraws on each tick).
+    val fast by androidx.compose.runtime.rememberUpdatedState(tasks.any { it.running } || pomoState(snap).running)
     LaunchedEffect(Unit) {
         var ticks = 0
         while (true) {
-            delay(1000); now = System.currentTimeMillis(); ticks++
+            delay(1000); ticks++
+            if (fast || ticks % 30 == 0) now = System.currentTimeMillis()
             if (ticks % 60 == 0) runCatching { repo.replan() }
         }
     }
@@ -330,7 +347,12 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             val fresh = repo.store.task(t.id) ?: t
             val link = snap.settings.quranLinks[seriesOf(t)]
             val pausing = viaTimer && fresh.running
-            val begin: suspend () -> Unit = { if (viaTimer) repo.timer(t.id) else repo.startNow(t.id) }
+            val yt = snap.settings.ytLinks[seriesOf(t)]
+            val begin: suspend () -> Unit = {
+                if (viaTimer) repo.timer(t.id) else repo.startNow(t.id)
+                // A task with a playlist opens its player at the episode and second reached.
+                if (yt != null && !pausing) ytPlay = t
+            }
             if (link == null || pausing) begin()
             else {
                 val st = if (link.missing) null else QuranAdapter.open(context, link, fresh)
@@ -385,6 +407,8 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         dayPlan = { d -> act { repo.prepareDay(d) }; dayPlan = d },
         quran = { quranFor = it },
         sports = { sportsOpen = true },
+        continueLater = { contFor = it },
+        yearParts = { partsFor = it },
         syncQuran = { act { val st = repo.syncQuran(); if (st != QuranState.OK) snackbar.showSnackbar(st.text) } },
         look = { series, color, icon -> act { repo.setLook(series, color, icon) } },
     )
@@ -533,6 +557,22 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         set = { k, v -> act { repo.setSetting(k, v) } },
         weekPlan = { weekPlan = true },
     ))
+    ytFor?.let { t -> YtLinkDialog(t, snap.settings.ytLinks[seriesOf(t)], close = { ytFor = null }) { l -> act { repo.setYt(seriesOf(t), l) } } }
+    ytPlay?.let { t ->
+        snap.settings.ytLinks[seriesOf(t)]?.let { l ->
+            YtPlayerSheet(t.baseTitle, l, close = { ytPlay = null }) { cur -> act { repo.setYt(seriesOf(t), cur) } }
+        } ?: run { ytPlay = null }
+    }
+    splitFor?.let { t -> SplitDialog(t, close = { splitFor = null }) { n -> act { repo.splitTask(t.id, n) } } }
+    contFor?.let { t -> PeriodPicker(snap.settings.periodsOn(today), Clock.minuteOfDay(now), close = { contFor = null }) { k -> act { repo.continueLater(t.id, k) } } }
+    partsFor?.let { y ->
+        val g = y.goal; val p = y.plan
+        YearPartsSheet(g?.name ?: p!!.title, g?.unit ?: p!!.unit, g?.reference ?: p!!.total.toDouble(),
+            YearMonth.from(today), snap.settings.let { YearPart.parseAll(snap.meta["yearParts"])[y.key].orEmpty() },
+            monthValue = { ym -> snap.months[Months.key(y.key, ym.toString())]?.value },
+            close = { partsFor = null }, save = { list -> act { repo.setYearParts(y.key, list) } },
+            editMonth = { ym -> monthEdit = MonthTarget(y.key, ym, g?.name ?: p!!.title, g?.unit ?: p!!.unit, snap.months[Months.key(y.key, ym.toString())]?.value ?: 0.0, g?.lower ?: false) })
+    }
     chainFor?.let { sr -> GoalChainSheet(snap, sr, close = { chainFor = null }, openWeek = { weekPlan = true }, openMonth = { monthPlan = true }) }
     moveDayFor?.let { t -> MoveDayDialog(t, today, close = { moveDayFor = null }) { d -> act { repo.moveToDay(t.id, d) } } }
     dayPlan?.let { d ->
@@ -553,6 +593,8 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             moveDay = { moveDayFor = t },
             postpone = { postponeFor = t },
             duplicate = { act { repo.duplicate(t.id) } },
+            split = { splitFor = t },
+            youtube = { ytFor = t },
             details = { detailsFor = t },
             edit = { editor = t },
             place = if (prayerDay) ({ placeFor = t }) else null,
@@ -932,6 +974,8 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
             Secondary(if (isMemorize) "حفظتها ✓" else "إنهاء", { nav.finish(t) }, Modifier.weight(1f))
             Secondary("تمديد ${s.settings.extend} د", { nav.act { repo.extend(t.id, s.settings.extend) } }, Modifier.weight(1f))
         }
+        if (s.settings.prayerMode && !t.isPlan && Maths.spent(t, now) >= 60_000) Secondary("كمّل الباقي بفترة ثانية", { nav.continueLater(t) }, Modifier.fillMaxWidth())
+        s.settings.ytLinks[seriesOf(t)]?.let { l -> Muted("▶ يوتيوب: حلقة ${l.index + 1}" + (if (l.total > 0) " من ${l.total}" else "") + if (l.finished) " · خلصت السلسلة" else "") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Secondary("تأجيل", { nav.postpone(t) }, Modifier.weight(1f))
             Secondary("ملاحظة", { nav.note(t) }, Modifier.weight(1f))
@@ -1032,6 +1076,7 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snaps
                     if (parent != null && t.open) add("بالتوازي مع ${parent.baseTitle}")
                     if (t.overflow && t.open && !hideTime) add("ما وسعها وقت اليوم")
                     if (t.state == "skipped") add("ما انعملت")
+                    if (t.done && t.phaseCount == 1 && t.pct in 1..99) add("منجز جزئياً ${t.pct}٪")
                     s?.targetOf(t)?.let { tg -> if (tg.text.isNotBlank() || tg.goal > 0) add(listOfNotNull(tg.text.ifBlank { null }, tg.goal.takeIf { it > 0 }?.let { "${tg.done}/$it" }).joinToString(" ")) }
                     s?.settings?.quranLinks?.get(seriesOf(t))?.let { l ->
                         add("📖 " + (s.quranToday?.ward(l.wardId)?.let { w -> QuranAdapter.mainNumber(l.mode, w.totals).let { (n, u) -> "$n $u" } } ?: l.wardName))

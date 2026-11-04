@@ -443,13 +443,15 @@ fun YearGoalSheet(y: YearTarget, s: Snapshot, nav: Nav, close: () -> Unit, accep
             if (!p.configured) Text("حدّد وين وصلت حتى تنحسب الأشهر.", style = MaterialTheme.typography.bodyLarge)
             if (p.kind == "review") Muted("المراجعة بتمشي على المحفوظ يومياً، ما إلها هدف شهري.")
         }
+        Action("تخطيط الأشهر (أجزاء السنة)", { nav.yearParts(target) }, Modifier.fillMaxWidth())
         if (!(p != null && (p.kind == "review" || !p.configured))) {
             Text("خطط الأشهر", style = MaterialTheme.typography.titleMedium)
             months.forEach { ym ->
                 val entry = s.months[Months.key(target.key, ym.toString())]
                 val default = if (g != null) goalMonthDefault(g, ym) else planMonthDefault(p!!, ym, s.today, s.memLast)
                 if (default != null) {
-                    val v = entry?.value ?: default
+                    // Records are filled by hand: no suggested value is shown for them.
+                    val v = entry?.value ?: if (g != null && s.settings.manualMonths) Double.NaN else default
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
                             nav.editMonth(MonthTarget(target.key, ym, g?.name ?: p!!.title, g?.unit ?: p!!.unit, default, g?.lower ?: false))
@@ -457,14 +459,14 @@ fun YearGoalSheet(y: YearTarget, s: Snapshot, nav: Nav, close: () -> Unit, accep
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(monthLabel(ym), Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                        Text(if (g != null) "${num(v)} ${g.unit}" else planMonthText(p!!, v), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                        Text(if (v.isNaN()) "—" else if (g != null) "${num(v)} ${g.unit}" else planMonthText(p!!, v), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
                         ReviewBadge(entry?.reviewed == true)
                     }
                     HorizontalDivider()
                 }
             }
             val pendingMonths = months.filter { s.months[Months.key(target.key, it.toString())]?.reviewed != true }.map { it.toString() }
-            if (pendingMonths.isNotEmpty()) Action("قبول كل المقترحات · ${pendingMonths.size}", { acceptAll(target.key, pendingMonths) }, Modifier.fillMaxWidth())
+            if (pendingMonths.isNotEmpty() && !(g != null && s.settings.manualMonths)) Action("قبول كل المقترحات · ${pendingMonths.size}", { acceptAll(target.key, pendingMonths) }, Modifier.fillMaxWidth())
         }
         Text("المجموعة", style = MaterialTheme.typography.labelLarge)
         val current = if (g != null) Cat.ofGoal(g) else Cat.ofPlan(p!!)

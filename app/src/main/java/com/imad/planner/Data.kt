@@ -138,7 +138,8 @@ data class Event(
 )
 
 /** The series a task belongs to: its recurring rule, its split group, the goal of a week session ("wk:"), or itself. */
-fun seriesOf(t: Task) = t.ruleId ?: t.note.takeIf { it.startsWith("grp:") } ?: t.note.takeIf { it.startsWith("wk:") }?.removePrefix("wk:") ?: t.id
+fun seriesOf(t: Task) = t.ruleId ?: t.note.takeIf { it.startsWith("grp:") } ?: t.note.takeIf { it.startsWith("wk:") }?.removePrefix("wk:")
+    ?: t.note.takeIf { it.startsWith("ser:") }?.removePrefix("ser:") ?: t.id
 
 @Entity(tableName = "goals")
 data class Goal(
@@ -359,6 +360,10 @@ data class Settings(
     val pausedGoals: Set<String> = emptySet(),
     /** How records show: both (picture and name) | icon (picture only). */
     val recordStyle: String = "both",
+    /** series -> YouTube playlist it plays, with where the user is in it. */
+    val ytLinks: Map<String, YtLink> = emptyMap(),
+    /** Record month targets are written by hand only (no automatic suggestion). */
+    val manualMonths: Boolean = true,
 ) {
     fun styleOf(page: String) = viewPages[page] ?: viewStyle
     fun alarmBefore(k: String) = prayerAlarms[k]?.split(",")?.getOrNull(0)?.toIntOrNull() ?: 0
@@ -416,7 +421,7 @@ data class Settings(
         val KEYS = listOf("dayStart", "dayEnd", "gap", "extend", "insistent", "alarms", "morning", "workEnd", "sportEnd", "maxSports", "maxHeavy", "sportGap",
             "jobOn", "jobStart", "jobEnd", "jobDays", "timerStyle", "groups", "closeDefault", "colors", "routine", "icons", "nameStyle", "swipeAction",
             "dayMode", "prayers", "prayerBefore", "prayerAfter", "prayerOffsets", "groupPeriods", "places", "fajrNap",
-            "prayerAlarms", "morningNote", "periodNote", "quranLinks", "weeklyRoutine", "viewStyle", "viewPages", "sportByWeek", "pausedGoals", "recordStyle")
+            "prayerAlarms", "morningNote", "periodNote", "quranLinks", "weeklyRoutine", "viewStyle", "viewPages", "sportByWeek", "pausedGoals", "recordStyle", "ytLinks", "manualMonths", "yearParts")
         fun from(m: Map<String, String>): Settings {
             fun i(k: String, d: Int) = m[k]?.toIntOrNull() ?: d
             return Settings(
@@ -445,6 +450,7 @@ data class Settings(
                 sportByWeek = m["sportByWeek"] != "0",
                 pausedGoals = runCatching { org.json.JSONArray(m["pausedGoals"] ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() } }.getOrDefault(emptySet()),
                 recordStyle = m["recordStyle"] ?: "both",
+                ytLinks = YtLink.parseAll(m["ytLinks"]), manualMonths = m["manualMonths"] != "0",
             ).also { Cat.groups = it.groups }
         }
     }
@@ -658,16 +664,22 @@ class Repository(private val context: Context) {
     val store: Store = db.store()
     private val lock = Mutex()
 
+    /**
+     * Every change runs one at a time and off the screen's thread: planning the day, the alarms and the JSON work
+     * would otherwise freeze scrolling while they run.
+     */
+    private suspend fun <T> locked(block: suspend () -> T): T = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { lock.withLock { block() } }
+
     private suspend fun settingsLocked(): Settings = Settings.from(Settings.KEYS.mapNotNull { k -> store.meta(k)?.let { k to it } }.toMap())
 
-    suspend fun setSetting(key: String, value: String) = lock.withLock {
+    suspend fun setSetting(key: String, value: String) = locked {
         store.put(Meta(key, value))
         replanLocked()
     }
 
     // ---------- seed ----------
 
-    suspend fun initialize() = lock.withLock {
+    suspend fun initialize() = locked {
         if (store.meta("seed-v2") == null) {
             db.withTransaction { seedGoalsAndProjects(); store.put(Meta("seed-v2", "1")) }
         }
@@ -677,6 +689,8 @@ class Repository(private val context: Context) {
         // 0.9: the prayer periods become the main way of arranging the day.
         if (store.meta("seed-v6") == null) { store.put(Meta("dayMode", "prayer")); store.put(Meta("seed-v6", "1")) }
         // 0.16: sessions come from the week plan; automatic sport sessions of the coming days are taken off (today's stay).
+        if (store.meta("undo")?.isNotEmpty() == true) store.put(Meta("undo", ""))
+        if (store.meta("safety")?.isNotEmpty() == true) store.put(Meta("safety", ""))
         if (store.meta("seed-v7") == null) {
             val today = Clock.today().toString()
             val sportRules = store.allRules().filter { it.category == "sport" }.map { it.id }.toSet()
@@ -730,20 +744,20 @@ class Repository(private val context: Context) {
     private suspend fun log(t: Task, type: String, text: String = "", delay: Int = 0) =
         store.put(Event(taskId = t.id, series = seriesOf(t), day = t.day, type = type, text = text, delayMin = delay))
 
-    suspend fun addNote(taskId: String, text: String) = lock.withLock {
-        val t = store.task(taskId) ?: return@withLock
+    suspend fun addNote(taskId: String, text: String) = locked {
+        val t = store.task(taskId) ?: return@locked
         if (text.isNotBlank()) log(t, "note", text.trim())
     }
 
     // ---------- groups ----------
 
-    suspend fun saveGroups(list: List<Group>) = lock.withLock {
+    suspend fun saveGroups(list: List<Group>) = locked {
         store.put(Meta("groups", Groups.encode(list)))
         replanLocked()
     }
 
     /** Moves a goal / plan / recurring task to another group. */
-    suspend fun moveToGroup(goalId: String?, planId: String?, ruleId: String?, group: String) = lock.withLock {
+    suspend fun moveToGroup(goalId: String?, planId: String?, ruleId: String?, group: String) = locked {
         goalId?.let { id -> store.goal(id)?.let { store.put(it.copy(category = group)) } }
         planId?.let { id ->
             val plans = plansLocked().map { if (it.id == id) it.copy(category = group) else it }
@@ -890,7 +904,7 @@ class Repository(private val context: Context) {
     private fun memLastOf(plans: List<Plan>) = plans.firstOrNull { it.kind == "memorize" && it.configured }?.done ?: 0
 
     /** Saves a plan; an accepted, configured plan gets a daily rule that feeds the schedule. */
-    suspend fun savePlan(plan: Plan, phases: String? = null) = lock.withLock {
+    suspend fun savePlan(plan: Plan, phases: String? = null) = locked {
         val today = Clock.today()
         val plans = plansLocked()
         val old = plans.firstOrNull { it.id == plan.id }
@@ -906,7 +920,7 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun deletePlan(id: String) = lock.withLock {
+    suspend fun deletePlan(id: String) = locked {
         savePlansLocked(plansLocked().filter { it.id != id })
         store.deleteRule("plan-$id")
         store.allTasks().filter { it.ruleId == "plan-$id" && it.open && it.spent == 0L && !it.running }.forEach { store.delete(it.id) }
@@ -914,7 +928,7 @@ class Repository(private val context: Context) {
     }
 
     /** Turns on the training sessions of these goals and spreads them over the coming days. */
-    suspend fun acceptGoals(ids: Collection<String>) = lock.withLock {
+    suspend fun acceptGoals(ids: Collection<String>) = locked {
         val set = ids.toSet()
         val today = Clock.today().toString()
         val targets = store.allRules().filter { !it.active && Members.goals(it).any { g -> g in set } }
@@ -924,7 +938,7 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun setMonth(goalKey: String, ym: String, value: Double?, reviewed: Boolean) = lock.withLock {
+    suspend fun setMonth(goalKey: String, ym: String, value: Double?, reviewed: Boolean) = locked {
         val m = Months.parse(store.meta("months")).toMutableMap()
         if (value == null && !reviewed) m.remove(Months.key(goalKey, ym)) else m[Months.key(goalKey, ym)] = MonthEntry(value, reviewed)
         store.put(Meta("months", Months.encode(m)))
@@ -932,7 +946,7 @@ class Repository(private val context: Context) {
         if (goalKey.startsWith("p:") && ym == java.time.YearMonth.from(Clock.today()).toString()) {
             val today = Clock.today()
             val plans = plansLocked()
-            val p = plans.firstOrNull { "p:${it.id}" == goalKey } ?: return@withLock
+            val p = plans.firstOrNull { "p:${it.id}" == goalKey } ?: return@locked
             if (p.kind == "cycle") syncPlanRuleLocked(p)
             if (p.dayKey == today.toString()) savePlansLocked(plans.map {
                 if (it.id == p.id) it.copy(dayQuota = PlanMath.quotaWithMonth(it, today, memLastOf(plans), monthTargetLocked(it, today))) else it
@@ -946,7 +960,7 @@ class Repository(private val context: Context) {
     private suspend fun monthTargetLocked(p: Plan, day: LocalDate): Double? =
         Months.parse(store.meta("months"))[Months.key("p:${p.id}", java.time.YearMonth.from(day).toString())]?.value
 
-    suspend fun acceptMonths(goalKey: String, yms: List<String>) = lock.withLock {
+    suspend fun acceptMonths(goalKey: String, yms: List<String>) = locked {
         val m = Months.parse(store.meta("months")).toMutableMap()
         yms.forEach { ym -> val k = Months.key(goalKey, ym); m[k] = (m[k] ?: MonthEntry(null, false)).copy(reviewed = true) }
         store.put(Meta("months", Months.encode(m)))
@@ -984,16 +998,16 @@ class Repository(private val context: Context) {
 
     // ---------- scheduling ----------
 
-    suspend fun replan() = lock.withLock { replanLocked() }
+    suspend fun replan() = locked { replanLocked() }
 
     // ---------- details, planning, pomodoro, Quran ----------
 
-    suspend fun setDetails(id: String, text: String) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
+    suspend fun setDetails(id: String, text: String) = locked {
+        val t = store.task(id) ?: return@locked
         store.put(t.copy(details = text.trim()))
     }
 
-    suspend fun setTarget(key: String, series: String, t: Target) = lock.withLock {
+    suspend fun setTarget(key: String, series: String, t: Target) = locked {
         val old = targetsLocked()
         val all = Targets.put(old, key, series, t)
         saveTargetsLocked(all)
@@ -1009,13 +1023,13 @@ class Repository(private val context: Context) {
     private suspend fun targetsLocked() = Targets.parse(store.meta("targets"))
     private suspend fun saveTargetsLocked(all: Map<String, Map<String, Target>>) = store.put(Meta("targets", Targets.encode(all)))
 
-    suspend fun addToWeek(start: LocalDate, series: String) = lock.withLock {
+    suspend fun addToWeek(start: LocalDate, series: String) = locked {
         val all = targetsLocked()
         if (all[Targets.weekKey(start)]?.containsKey(series) != true) saveTargetsLocked(Targets.put(all, Targets.weekKey(start), series, Target(keep = true)))
     }
 
     /** Takes a goal out of one week: its targets and the sessions not started yet. */
-    suspend fun removeFromWeek(start: LocalDate, series: String) = lock.withLock {
+    suspend fun removeFromWeek(start: LocalDate, series: String) = locked {
         saveTargetsLocked(Targets.removeFromWeek(targetsLocked(), start, series))
         markRoutineHandledLocked(start, series)
         val today = Clock.today()
@@ -1024,7 +1038,7 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun setWeeklyRoutine(series: String, on: Boolean) = lock.withLock {
+    suspend fun setWeeklyRoutine(series: String, on: Boolean) = locked {
         val set = runCatching { org.json.JSONArray(store.meta("weeklyRoutine") ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) } } }.getOrDefault(emptyList()).toMutableSet()
         if (on) set += series else set -= series
         store.put(Meta("weeklyRoutine", org.json.JSONArray(set.toList()).toString()))
@@ -1053,7 +1067,7 @@ class Repository(private val context: Context) {
     }
 
     /** Opens a week for planning: routine goals copied, sessions made into tasks. */
-    suspend fun prepareWeek(start: LocalDate) = lock.withLock {
+    suspend fun prepareWeek(start: LocalDate) = locked {
         ensureRoutineWeekLocked(start)
         syncSessionsLocked(start)
         replanLocked()
@@ -1113,9 +1127,9 @@ class Repository(private val context: Context) {
     }
 
     /** Moves a task to any day. */
-    suspend fun moveToDay(id: String, day: LocalDate) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
-        if (!t.open) return@withLock
+    suspend fun moveToDay(id: String, day: LocalDate) = locked {
+        val t = store.task(id) ?: return@locked
+        if (!t.open) return@locked
         snapshotLocked("نقل «${t.baseTitle}»")
         val now = System.currentTimeMillis()
         shiftSessionLocked(t, day.toString())
@@ -1126,7 +1140,7 @@ class Repository(private val context: Context) {
     }
 
     /** Moves one planned session of a goal from a day to another (week plan). */
-    suspend fun moveSession(series: String, from: LocalDate, to: LocalDate) = lock.withLock {
+    suspend fun moveSession(series: String, from: LocalDate, to: LocalDate) = locked {
         val t = store.tasksOn(from.toString()).firstOrNull { it.note == "wk:$series" && it.open && !it.running }
         if (t != null) {
             shiftSessionLocked(t, to.toString())
@@ -1143,15 +1157,15 @@ class Repository(private val context: Context) {
     }
 
     /** A copy of a task on the same day, not started. */
-    suspend fun duplicate(id: String) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
+    suspend fun duplicate(id: String) = locked {
+        val t = store.task(id) ?: return@locked
         store.put(t.copy(id = UUID.randomUUID().toString(), state = "planned", spent = 0, started = 0, finishedAt = 0, doneUnits = 0,
-            ruleId = null, note = if (t.note.startsWith("wk:")) "" else t.note, planned = if (t.pinned) t.planned else 0, created = System.currentTimeMillis()))
+            ruleId = null, note = if (t.note.startsWith("grp:")) t.note else "ser:${seriesOf(t)}", planned = if (t.pinned) t.planned else 0, created = System.currentTimeMillis()))
         replanLocked()
     }
 
     /** After finishing a task: how much of its day target was done. */
-    suspend fun addTargetDone(day: String, series: String, n: Int) = lock.withLock {
+    suspend fun addTargetDone(day: String, series: String, n: Int) = locked {
         val all = Targets.parse(store.meta("targets"))
         val key = "d:$day"
         val cur = all[key]?.get(series) ?: Target()
@@ -1159,7 +1173,7 @@ class Repository(private val context: Context) {
     }
 
     /** Creates the day's tasks and proposes a period for each one that has none (the user can move them). */
-    suspend fun prepareDay(day: LocalDate) = lock.withLock {
+    suspend fun prepareDay(day: LocalDate) = locked {
         ensureDayLocked(day)
         val s = settingsLocked()
         val ds = day.toString()
@@ -1183,8 +1197,8 @@ class Repository(private val context: Context) {
     }
 
     /** Puts a task in a period ("" = back to the list of tasks not placed yet). */
-    suspend fun assignPeriod(id: String, key: String) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
+    suspend fun assignPeriod(id: String, key: String) = locked {
+        val t = store.task(id) ?: return@locked
         val s = settingsLocked()
         val day = LocalDate.parse(t.day)
         val start = s.periodsOn(day).firstOrNull { it.key == key }?.start
@@ -1194,7 +1208,7 @@ class Repository(private val context: Context) {
     }
 
     /** The day is planned: what was left in the list (and is not routine) goes to the next day. */
-    suspend fun confirmDayPlan(day: LocalDate): Int = lock.withLock {
+    suspend fun confirmDayPlan(day: LocalDate): Int = locked {
         val s = settingsLocked()
         val rules = store.allRules().associateBy { it.id }
         val left = store.tasksOn(day.toString()).filter { it.open && !it.running && it.spent == 0L && it.period.isEmpty() && !isRoutine(it, rules, s) }
@@ -1205,7 +1219,7 @@ class Repository(private val context: Context) {
     }
 
     /** Pomodoro: a 25-minute timer that is not one of the day's tasks. State: "end" while running, "left" while paused. */
-    suspend fun pomo(action: String) = lock.withLock {
+    suspend fun pomo(action: String) = locked {
         val now = System.currentTimeMillis()
         val st = JSONObject(store.meta("pomo")?.takeIf { it.isNotBlank() } ?: "{}")
         val end = st.optLong("end"); val left = st.optLong("left", POMO_MS)
@@ -1223,10 +1237,10 @@ class Repository(private val context: Context) {
     }
 
     /** Called when the pomodoro time is over (alarm or app opened). */
-    suspend fun pomoCheck() = lock.withLock {
-        val st = JSONObject(store.meta("pomo")?.takeIf { it.isNotBlank() } ?: return@withLock)
+    suspend fun pomoCheck() = locked {
+        val st = JSONObject(store.meta("pomo")?.takeIf { it.isNotBlank() } ?: return@locked)
         val end = st.optLong("end")
-        if (end == 0L || end > System.currentTimeMillis()) return@withLock
+        if (end == 0L || end > System.currentTimeMillis()) return@locked
         addPomoLocked(st.optLong("startedAt", end - POMO_MS), (POMO_MS / 60_000).toInt())
         store.put(Meta("pomo", st.put("end", 0L).put("left", POMO_MS).toString()))
     }
@@ -1238,13 +1252,13 @@ class Repository(private val context: Context) {
         store.put(Meta("pomo:$day", a.toString()))
     }
 
-    suspend fun pomoLabel(day: String, index: Int, label: String) = lock.withLock {
-        val a = org.json.JSONArray(store.meta("pomo:$day")?.takeIf { it.isNotBlank() } ?: return@withLock)
+    suspend fun pomoLabel(day: String, index: Int, label: String) = locked {
+        val a = org.json.JSONArray(store.meta("pomo:$day")?.takeIf { it.isNotBlank() } ?: return@locked)
         if (index in 0 until a.length()) a.getJSONObject(index).put("label", label.trim())
         store.put(Meta("pomo:$day", a.toString()))
     }
 
-    suspend fun setQuranLink(series: String, link: QuranLink?) = lock.withLock {
+    suspend fun setQuranLink(series: String, link: QuranLink?) = locked {
         val o = JSONObject(store.meta("quranLinks")?.takeIf { it.isNotBlank() } ?: "{}")
         if (link == null) o.remove(series) else o.put(series, JSONObject().put("mode", link.mode).put("ward", link.wardId).put("name", link.wardName))
         store.put(Meta("quranLinks", o.toString()))
@@ -1256,9 +1270,9 @@ class Repository(private val context: Context) {
      */
     suspend fun syncQuran(): QuranState {
         val today = Clock.today().toString()
-        val (st, rep) = QuranAdapter.report(context, today)
-        val wards = if (st == QuranState.OK) QuranAdapter.wards(context) else st to emptyList()
-        lock.withLock {
+        val (st, rep) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { QuranAdapter.report(context, today) }
+        val wards = if (st == QuranState.OK) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { QuranAdapter.wards(context) } else st to emptyList()
+        locked {
             store.put(Meta("quranState", st.name))
             if (rep != null) {
                 val old = store.meta("quran:$today")?.let { runCatching { QuranAdapter.parseReport(JSONObject(it), 0) }.getOrNull() }
@@ -1302,16 +1316,74 @@ class Repository(private val context: Context) {
         if (drop.isNotEmpty()) store.putAll(drop.map { it.copy(state = "skipped", note = if (it.note.startsWith("grp:")) it.note else "مكرر") })
     }
 
+    // ---------- YouTube playlists ----------
+
+    suspend fun setYt(series: String, link: YtLink?) = locked {
+        val all = YtLink.parseAll(store.meta("ytLinks")).toMutableMap()
+        if (link == null) all.remove(series) else all[series] = link
+        store.put(Meta("ytLinks", YtLink.encodeAll(all)))
+    }
+
+    // ---------- splitting a task ----------
+
+    /** Split into [n] equal parts on the same day; each part can then go to its own period. */
+    suspend fun splitTask(id: String, n: Int) = locked {
+        val t = store.task(id) ?: return@locked
+        if (!t.open || n < 2 || t.isPlan) return@locked
+        snapshotLocked("تقسيم «${t.baseTitle}»")
+        val now = System.currentTimeMillis()
+        val spentMin = (Maths.spent(t, now) / 60_000).toInt()
+        val left = (t.minutes - spentMin).coerceAtLeast(n * 5)
+        val each = left / n
+        val series = seriesOf(t)
+        store.put(t.copy(minutes = spentMin + each + left % n, started = 0, spent = Maths.spent(t, now), title = t.baseTitle + " · ١/$n"))
+        for (k in 2..n) store.put(t.copy(id = UUID.randomUUID().toString(), title = t.baseTitle + " · $k/$n", minutes = each, spent = 0, started = 0,
+            ruleId = null, note = "ser:$series", planned = 0, pinned = false, created = now + k))
+        replanLocked()
+    }
+
+    /**
+     * Part of a task is done and the rest goes to another period: this part is finished with the share of the
+     * whole it took (25 of 60 minutes ≈ 42 %), and the rest becomes a new task of the remaining minutes.
+     */
+    suspend fun continueLater(id: String, period: String) = locked {
+        val t = store.task(id) ?: return@locked
+        if (!t.open || t.isPlan) return@locked
+        snapshotLocked("تكملة «${t.baseTitle}» بعدين")
+        val now = System.currentTimeMillis()
+        val spent = Maths.spent(t, now)
+        val spentMin = ((spent + 59_999) / 60_000).toInt().coerceAtLeast(1)
+        val rest = (t.minutes - spentMin).coerceAtLeast(5)
+        val pct = (spentMin * 100 / (spentMin + rest)).coerceIn(1, 99)
+        val s = settingsLocked()
+        store.put(t.copy(state = "done", started = 0, spent = spent, finishedAt = now, minutes = spentMin, pct = pct,
+            note = if (t.note.isEmpty() && t.ruleId == null) "" else t.note))
+        log(t, "finish", "جزء: $pct٪")
+        val start = s.periodsOn(LocalDate.parse(t.day)).firstOrNull { it.key == period }?.start
+        store.put(t.copy(id = UUID.randomUUID().toString(), title = t.baseTitle + " · الباقي", minutes = rest, spent = 0, started = 0,
+            state = "planned", ruleId = null, note = "ser:${seriesOf(t)}", period = period, planned = 0, pinned = false,
+            preferMin = start?.let { maxOf(it + s.prayerAfter, Clock.minuteOfDay(now)) } ?: -1, created = now))
+        replanLocked()
+    }
+
+    // ---------- year parts ----------
+
+    suspend fun setYearParts(key: String, parts: List<YearPart>) = locked {
+        val all = YearPart.parseAll(store.meta("yearParts")).toMutableMap()
+        if (parts.isEmpty()) all.remove(key) else all[key] = parts
+        store.put(Meta("yearParts", YearPart.encodeAll(all)))
+    }
+
     // ---------- records and training sessions ----------
 
     /** Saves a record (new or edited). A new current value is logged. */
-    suspend fun saveRecord(g: Goal) = lock.withLock {
+    suspend fun saveRecord(g: Goal) = locked {
         val old = store.goal(g.id)
         store.put(g)
         if (old == null || old.current != g.current) store.put(GoalLog(goalId = g.id, day = Clock.today().toString(), value = g.current))
     }
 
-    suspend fun deleteRecord(id: String) = lock.withLock {
+    suspend fun deleteRecord(id: String) = locked {
         store.deleteGoal(id)
         // Exercises that pointed to it stay in their sessions, just without a record.
         store.allRules().filter { r -> Members.parse(r.members).any { it.goal == id } || r.goalId == id }.forEach { r ->
@@ -1320,14 +1392,14 @@ class Repository(private val context: Context) {
         }
     }
 
-    suspend fun setPaused(id: String, paused: Boolean) = lock.withLock {
+    suspend fun setPaused(id: String, paused: Boolean) = locked {
         val set = runCatching { org.json.JSONArray(store.meta("pausedGoals") ?: "[]").let { a -> (0 until a.length()).map { a.getString(it) } } }.getOrDefault(emptyList()).toMutableSet()
         if (paused) set += id else set -= id
         store.put(Meta("pausedGoals", org.json.JSONArray(set.toList()).toString()))
     }
 
     /** Saves a training session with its exercises; its length and sets follow from them. */
-    suspend fun saveSession(r: Rule, members: List<Exercise>) = lock.withLock {
+    suspend fun saveSession(r: Rule, members: List<Exercise>) = locked {
         val sh = Members.session(members)
         store.put(r.copy(members = Members.encode(members), minutes = if (members.isEmpty()) r.minutes else sh.minutes, sets = sh.sets, workSec = sh.workSec,
             restSec = sh.restSec, goalId = members.firstOrNull { it.goal != null }?.goal ?: r.goalId, kind = "training", category = "sport"))
@@ -1337,23 +1409,23 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun deleteSession(id: String) = lock.withLock {
+    suspend fun deleteSession(id: String) = locked {
         store.deleteRule(id)
         store.allTasks().filter { (it.ruleId == id || it.note == "wk:$id") && it.open && !it.running && it.spent == 0L }.forEach { store.delete(it.id) }
         replanLocked()
     }
 
     /** Routine on or off for a task's series (from a long press in day planning); the task stays where it is. */
-    suspend fun setRoutine(series: String, on: Boolean) = lock.withLock {
+    suspend fun setRoutine(series: String, on: Boolean) = locked {
         val r = JSONObject(store.meta("routine")?.takeIf { it.isNotBlank() } ?: "{}").put(series, on)
         store.put(Meta("routine", r.toString()))
     }
 
-    suspend fun refreshWidget() = lock.withLock {
+    suspend fun refreshWidget() = locked {
         PlannerWidget.update(context, store.tasksOn(Clock.today().toString()), settingsLocked())
     }
 
-    suspend fun refreshDay() = lock.withLock {
+    suspend fun refreshDay() = locked {
         autoCloseLocked()
         ensureDayLocked(Clock.today())
         Targets.weekStart(Clock.today()).let { ensureRoutineWeekLocked(it); syncSessionsLocked(it) }
@@ -1369,12 +1441,12 @@ class Repository(private val context: Context) {
     }
 
     /** Creates tomorrow's (or any future day's) tasks so they can be edited. */
-    suspend fun materialize(day: LocalDate) = lock.withLock {
+    suspend fun materialize(day: LocalDate) = locked {
         ensureDayLocked(day)
         replanLocked()
     }
 
-    suspend fun materializeRule(ruleId: String, day: LocalDate): String? = lock.withLock {
+    suspend fun materializeRule(ruleId: String, day: LocalDate): String? = locked {
         val created = ensureDayLocked(day, ruleId)
         replanLocked()
         created.firstOrNull()?.id ?: store.allTasks().firstOrNull { it.ruleId == ruleId && it.day == day.toString() }?.id
@@ -1502,7 +1574,7 @@ class Repository(private val context: Context) {
 
     // ---------- task actions ----------
 
-    suspend fun save(task: Task, asDefault: Boolean = false) = lock.withLock {
+    suspend fun save(task: Task, asDefault: Boolean = false) = locked {
         require(Maths.valid(task.title, task.minutes))
         val old = store.task(task.id)
         val spentNow = old?.let { Maths.spent(it, System.currentTimeMillis()) } ?: task.spent
@@ -1526,7 +1598,7 @@ class Repository(private val context: Context) {
     }
 
     /** New one-off task; split into phases over the day when [phases] has more than one part. */
-    suspend fun saveNew(task: Task, phases: List<Int>) = lock.withLock {
+    suspend fun saveNew(task: Task, phases: List<Int>) = locked {
         require(Maths.valid(task.title, task.minutes))
         val n = phases.size
         if (n <= 1) store.put(task.copy(title = task.title.trim(), units = task.minutes))
@@ -1546,7 +1618,7 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun saveRule(rule: Rule) = lock.withLock {
+    suspend fun saveRule(rule: Rule) = locked {
         val old = store.rule(rule.id)
         store.put(rule)
         val today = Clock.today()
@@ -1557,20 +1629,20 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun deleteRule(id: String) = lock.withLock {
+    suspend fun deleteRule(id: String) = locked {
         store.deleteRule(id)
         store.allTasks().filter { it.ruleId == id && it.open && it.spent == 0L && !it.running }.forEach { store.delete(it.id) }
         replanLocked()
     }
 
     /** Start / pause toggle. Starting a task pauses any other running task. */
-    suspend fun timer(id: String) = lock.withLock {
+    suspend fun timer(id: String) = locked {
         val now = System.currentTimeMillis()
-        val t = store.task(id) ?: return@withLock
+        val t = store.task(id) ?: return@locked
         if (t.running) {
             store.put(t.copy(spent = Maths.spent(t, now), started = 0)); log(t, "pause")
         } else {
-            if (!t.open) return@withLock
+            if (!t.open) return@locked
             startLocked(t, now)
         }
         replanLocked()
@@ -1587,10 +1659,10 @@ class Repository(private val context: Context) {
     }
 
     /** Starts [id] right now; the task that was due now takes its place in the day. */
-    suspend fun startNow(id: String) = lock.withLock {
+    suspend fun startNow(id: String) = locked {
         val now = System.currentTimeMillis()
-        val t = store.task(id) ?: return@withLock
-        if (!t.open) return@withLock
+        val t = store.task(id) ?: return@locked
+        if (!t.open) return@locked
         val todays = store.tasksOn(Clock.today().toString()).filter { it.open && it.id != id && it.parallelTo == null }
         val displaced = todays.firstOrNull { it.running }
             ?: todays.filter { it.spent == 0L && it.planned > 0 }.minByOrNull { it.planned }
@@ -1602,9 +1674,9 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun finish(id: String) = lock.withLock {
+    suspend fun finish(id: String) = locked {
         val now = System.currentTimeMillis()
-        val t = store.task(id) ?: return@withLock
+        val t = store.task(id) ?: return@locked
         snapshotLocked("إنهاء «${t.baseTitle}»")
         if (t.isPlan) {
             val plans = plansLocked()
@@ -1624,10 +1696,10 @@ class Repository(private val context: Context) {
     }
 
     /** One page of the review was heard (called by the player). */
-    suspend fun reviewPageDone(taskId: String) = lock.withLock {
-        val t = store.task(taskId) ?: return@withLock
+    suspend fun reviewPageDone(taskId: String) = locked {
+        val t = store.task(taskId) ?: return@locked
         val plans = plansLocked()
-        if (plans.none { "plan-${it.id}" == t.ruleId }) return@withLock
+        if (plans.none { "plan-${it.id}" == t.ruleId }) return@locked
         val mem = memLastOf(plans)
         store.put(t.copy(doneUnits = t.doneUnits + 1))
         savePlansLocked(plans.map { p ->
@@ -1638,22 +1710,22 @@ class Repository(private val context: Context) {
     }
 
     /** Pages to play for a review task: its share, or (continue) everything left for today. */
-    suspend fun reviewPages(taskId: String, cont: Boolean): List<Int> = lock.withLock {
-        val t = store.task(taskId) ?: return@withLock emptyList()
+    suspend fun reviewPages(taskId: String, cont: Boolean): List<Int> = locked {
+        val t = store.task(taskId) ?: return@locked emptyList()
         val plans = plansLocked()
-        val p = plans.firstOrNull { "plan-${it.id}" == t.ruleId } ?: return@withLock emptyList()
+        val p = plans.firstOrNull { "plan-${it.id}" == t.ruleId } ?: return@locked emptyList()
         val count = if (cont) (p.dayQuota - p.dayDone).coerceAtLeast(0) else (t.units - t.doneUnits).coerceAtLeast(0)
         PlanMath.reviewPages(p, 0, count, memLastOf(plans))
     }
 
-    suspend fun reopen(id: String) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
+    suspend fun reopen(id: String) = locked {
+        val t = store.task(id) ?: return@locked
         store.put(t.copy(state = "planned", finishedAt = 0))
         replanLocked()
     }
 
-    suspend fun extend(id: String, minutes: Int) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
+    suspend fun extend(id: String, minutes: Int) = locked {
+        val t = store.task(id) ?: return@locked
         store.put(t.copy(minutes = (t.minutes + minutes).coerceAtMost(10080)))
         log(t, "extend", "+$minutes د")
         replanLocked()
@@ -1665,15 +1737,15 @@ class Repository(private val context: Context) {
      * merge (one longer session), keep (both), skip (drop this one, the series keeps its dates),
      * move (this one replaces tomorrow's and the series shifts, like carrying at day end).
      */
-    suspend fun postpone(id: String, reason: String = "", mode: String = "move") = lock.withLock {
+    suspend fun postpone(id: String, reason: String = "", mode: String = "move") = locked {
         val now = System.currentTimeMillis()
-        val t = store.task(id) ?: return@withLock
+        val t = store.task(id) ?: return@locked
         snapshotLocked("تأجيل «${t.baseTitle}»")
         val rule = t.ruleId?.let { store.rule(it) }
         if (rule != null && mode != "move") {
             postponeRecurringLocked(t, rule, reason.trim(), mode, now)
             replanLocked()
-            return@withLock
+            return@locked
         }
         log(t, "postpone", reason.trim())
         val tomorrow = LocalDate.parse(t.day).coerceAtLeast(Clock.today()).plusDays(1)
@@ -1725,9 +1797,9 @@ class Repository(private val context: Context) {
     }
 
     /** Time is up but the work is not: pause and keep [leftMin] more minutes for later today. */
-    suspend fun stopKeepRest(id: String, leftMin: Int) = lock.withLock {
+    suspend fun stopKeepRest(id: String, leftMin: Int) = locked {
         val now = System.currentTimeMillis()
-        val t = store.task(id) ?: return@withLock
+        val t = store.task(id) ?: return@locked
         snapshotLocked("إيقاف «${t.baseTitle}»")
         val spent = Maths.spent(t, now)
         val spentMin = ((spent + 59_999) / 60_000).toInt()
@@ -1738,10 +1810,10 @@ class Repository(private val context: Context) {
     }
 
     /** Moves an open task of today into a prayer period (today only). */
-    suspend fun moveToPeriod(id: String, key: String) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
+    suspend fun moveToPeriod(id: String, key: String) = locked {
+        val t = store.task(id) ?: return@locked
         val s = settingsLocked()
-        val p = s.periodsOn(LocalDate.parse(t.day)).firstOrNull { it.key == key } ?: return@withLock
+        val p = s.periodsOn(LocalDate.parse(t.day)).firstOrNull { it.key == key } ?: return@locked
         snapshotLocked("نقل «${t.baseTitle}»")
         val now = System.currentTimeMillis()
         store.put(t.copy(preferMin = maxOf(p.start + s.prayerAfter, if (t.day == Clock.today().toString()) Clock.minuteOfDay(now) else 0),
@@ -1751,14 +1823,14 @@ class Repository(private val context: Context) {
     }
 
     /** Where a series sits in prayer mode ("" = by its group). */
-    suspend fun setPlace(series: String, place: String) = lock.withLock {
+    suspend fun setPlace(series: String, place: String) = locked {
         val o = JSONObject(store.meta("places")?.takeIf { it.isNotBlank() } ?: "{}")
         if (place.isEmpty()) o.remove(series) else o.put(series, place)
         store.put(Meta("places", o.toString()))
         replanLocked()
     }
 
-    suspend fun setGroupPeriod(group: String, period: String) = lock.withLock {
+    suspend fun setGroupPeriod(group: String, period: String) = locked {
         val o = JSONObject(store.meta("groupPeriods")?.takeIf { it.isNotBlank() } ?: "{}")
         if (period.isEmpty()) o.remove(group) else o.put(group, period)
         store.put(Meta("groupPeriods", o.toString()))
@@ -1769,17 +1841,17 @@ class Repository(private val context: Context) {
 
     /** Keeps the whole state before an important action so it can be undone once. */
     private suspend fun snapshotLocked(label: String) {
-        store.put(Meta("undo", backupLocked()))
+        java.io.File(context.filesDir, "undo.json").writeText(backupLocked())
         store.put(Meta("undoLabel", label))
         store.put(Meta("undoAt", System.currentTimeMillis().toString()))
     }
 
     /** From the period-end notification: the period's open tasks go to the next period, or to tomorrow. */
-    suspend fun movePeriodTasks(from: String, toTomorrow: Boolean) = lock.withLock {
+    suspend fun movePeriodTasks(from: String, toTomorrow: Boolean) = locked {
         val today = Clock.today()
         val s = settingsLocked()
         val open = store.tasksOn(today.toString()).filter { it.open && !it.running && it.period == from }
-        if (open.isEmpty()) return@withLock
+        if (open.isEmpty()) return@locked
         snapshotLocked(if (toTomorrow) "تأجيل مهام فترة ${Prayer.names[from]}" else "نقل مهام فترة ${Prayer.names[from]}")
         if (toTomorrow) open.forEach { endTaskLocked(it, "carry", "") }
         else {
@@ -1794,22 +1866,23 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun undo(): String? = lock.withLock {
-        val text = store.meta("undo")?.takeIf { it.isNotBlank() } ?: return@withLock null
+    suspend fun undo(): String? = locked {
+        val f = java.io.File(context.filesDir, "undo.json")
+        val text = (if (f.exists()) f.readText() else store.meta("undo"))?.takeIf { it.isNotBlank() } ?: return@locked null
         val label = store.meta("undoLabel") ?: ""
         restoreLocked(text)
-        store.put(Meta("undo", "")); store.put(Meta("undoLabel", ""))
+        f.delete(); store.put(Meta("undo", "")); store.put(Meta("undoLabel", ""))
         replanLocked()
         label
     }
 
-    suspend fun bringToToday(id: String) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
+    suspend fun bringToToday(id: String) = locked {
+        val t = store.task(id) ?: return@locked
         store.put(t.copy(day = Clock.today().toString(), pinned = false, planned = 0, state = "planned", period = ""))
         replanLocked()
     }
 
-    suspend fun delete(id: String) = lock.withLock {
+    suspend fun delete(id: String) = locked {
         store.task(id)?.let { snapshotLocked("حذف «${it.baseTitle}»") }
         store.delete(id)
         replanLocked()
@@ -1820,7 +1893,7 @@ class Repository(private val context: Context) {
      * Ends a day. carry: unfinished tasks move to the next day (and their series shift after them).
      * close: the plan stays as it is; unfinished tasks are recorded as not done.
      */
-    suspend fun closeDay(mode: String, day: LocalDate = Clock.today()): Int = lock.withLock {
+    suspend fun closeDay(mode: String, day: LocalDate = Clock.today()): Int = locked {
         val n = closeDayLocked(day, mode)
         replanLocked()
         n
@@ -1866,9 +1939,9 @@ class Repository(private val context: Context) {
     }
 
     /** Swipe action on one task: carry to the next day, close it, or move it to a free time later the same day. */
-    suspend fun deferTask(id: String, mode: String) = lock.withLock {
-        val t = store.task(id) ?: return@withLock
-        if (!t.open) return@withLock
+    suspend fun deferTask(id: String, mode: String) = locked {
+        val t = store.task(id) ?: return@locked
+        if (!t.open) return@locked
         snapshotLocked(if (mode == "close") "إغلاق «${t.baseTitle}»" else "تأجيل «${t.baseTitle}»")
         when (mode) {
             "later" -> {
@@ -1885,7 +1958,7 @@ class Repository(private val context: Context) {
     suspend fun isClosed(day: LocalDate): Boolean = store.meta("closed:$day") != null
 
     /** Colour and icon for several series at once (a goal's tasks, set from the year plan). */
-    suspend fun setLook(series: List<String>, color: Int?, icon: String?) = lock.withLock {
+    suspend fun setLook(series: List<String>, color: Int?, icon: String?) = locked {
         if (color != null) {
             val c = JSONObject(store.meta("colors")?.takeIf { it.isNotBlank() } ?: "{}")
             series.forEach { c.put(it, color) }
@@ -1899,7 +1972,7 @@ class Repository(private val context: Context) {
     }
 
     /** Routine flag and colour of a task's series. */
-    suspend fun setTag(series: String, routine: Boolean, color: Int) = lock.withLock {
+    suspend fun setTag(series: String, routine: Boolean, color: Int) = locked {
         val r = JSONObject(store.meta("routine")?.takeIf { it.isNotBlank() } ?: "{}").put(series, routine)
         val c = JSONObject(store.meta("colors")?.takeIf { it.isNotBlank() } ?: "{}").put(series, color)
         store.put(Meta("routine", r.toString())); store.put(Meta("colors", c.toString()))
@@ -1907,14 +1980,14 @@ class Repository(private val context: Context) {
 
     // ---------- goals ----------
 
-    suspend fun goal(g: Goal, logValue: Boolean) = lock.withLock {
+    suspend fun goal(g: Goal, logValue: Boolean) = locked {
         val old = store.goal(g.id)
         store.put(g)
         if (logValue && (old == null || old.current != g.current)) store.put(GoalLog(goalId = g.id, day = Clock.today().toString(), value = g.current))
     }
 
     /** A new goal from the user, with an optional recurring session that feeds the schedule. */
-    suspend fun addGoal(g: Goal, session: Rule?) = lock.withLock {
+    suspend fun addGoal(g: Goal, session: Rule?) = locked {
         store.put(g)
         store.put(GoalLog(goalId = g.id, day = Clock.today().toString(), value = g.current))
         if (session != null) {
@@ -1925,7 +1998,7 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
-    suspend fun deleteGoal(id: String) = lock.withLock {
+    suspend fun deleteGoal(id: String) = locked {
         store.deleteGoal(id)
         store.allRules().filter { it.goalId == id && it.members.isBlank() }.forEach { r ->
             store.deleteRule(r.id)
@@ -1936,7 +2009,7 @@ class Repository(private val context: Context) {
 
     // ---------- backup ----------
 
-    suspend fun backup(): String = lock.withLock { backupLocked() }
+    suspend fun backup(): String = locked { backupLocked() }
 
     private suspend fun backupLocked(): String {
         val tasks = JSONArray()
@@ -1990,13 +2063,13 @@ class Repository(private val context: Context) {
     }
 
     /** Accepts backups of every version of the app. The current data is kept first so the restore can be undone. */
-    suspend fun restore(text: String) = lock.withLock {
+    suspend fun restore(text: String) = locked {
         val root = JSONObject(text)
         require(root.optInt("schema", 1) in 1..4) { "صيغة غير معروفة" }
         val safety = backupLocked()
-        store.put(Meta("safety", safety))
+        java.io.File(context.filesDir, "safety.json").writeText(safety)
         restoreLocked(text)
-        store.put(Meta("undo", safety)); store.put(Meta("undoLabel", "الاستعادة"))
+        java.io.File(context.filesDir, "undo.json").writeText(safety); store.put(Meta("undoLabel", "الاستعادة"))
         ensureDayLocked(Clock.today())
         replanLocked()
     }

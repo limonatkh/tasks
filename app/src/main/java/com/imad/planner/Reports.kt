@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import java.time.LocalDate
@@ -60,6 +61,8 @@ class TaskOps(
     val moveDay: (() -> Unit)? = null,
     val postpone: (() -> Unit)? = null,
     val duplicate: (() -> Unit)? = null,
+    val split: (() -> Unit)? = null,
+    val youtube: (() -> Unit)? = null,
     val details: (() -> Unit)? = null,
     val edit: (() -> Unit)? = null,
     val place: (() -> Unit)? = null,
@@ -96,6 +99,8 @@ fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps) {
             ops.details?.let { FilterChip(false, go(it), label = { Text("تفاصيل") }) }
             ops.edit?.let { FilterChip(false, go(it), label = { Text("تعديل (مدة، مجموعة، لون، رمز، تكرار)") }) }
             ops.duplicate?.let { FilterChip(false, go(it), label = { Text("نسخة") }) }
+            if (t.open && !t.isPlan) ops.split?.let { FilterChip(false, go(it), label = { Text("قسّم") }) }
+            ops.youtube?.let { FilterChip(false, go(it), label = { Text("قائمة يوتيوب") }) }
             ops.quran?.let { FilterChip(false, go(it), label = { Text("ورد القرآن") }) }
             ops.note?.let { FilterChip(false, go(it), label = { Text("ملاحظة") }) }
             ops.report?.let { FilterChip(false, go(it), label = { Text("التقرير") }) }
@@ -113,26 +118,44 @@ fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps) {
 
 fun swipeLabel(mode: String) = when (mode) { "close" -> "إغلاق"; "later" -> "لوقت فاضي اليوم"; else -> "ترحيل لبكرا" }
 
-/** Swipe right to start (when [start] is given), swipe left for the action chosen in the settings. */
+/**
+ * Swipe right to start (when [start] is given), swipe left for the action chosen in the settings ([defer], when given).
+ * Like the phone app: it needs a clear sideways swipe of about half the row, a direction with no action does not move
+ * at all, and the action's colour, icon and word come in gradually as the row slides.
+ */
 @Composable
-fun SwipeRow(start: (() -> Unit)?, defer: () -> Unit, deferMode: String, content: @Composable () -> Unit) {
-    val state = rememberSwipeToDismissBoxState(confirmValueChange = { v ->
-        when (v) {
-            SwipeToDismissBoxValue.EndToStart -> start?.invoke()
-            SwipeToDismissBoxValue.StartToEnd -> defer()
-            else -> {}
-        }
-        false
-    })
+fun SwipeRow(start: (() -> Unit)?, defer: (() -> Unit)?, deferMode: String, content: @Composable () -> Unit) {
+    val state = rememberSwipeToDismissBoxState(
+        confirmValueChange = { v ->
+            when (v) {
+                SwipeToDismissBoxValue.EndToStart -> start?.invoke()
+                SwipeToDismissBoxValue.StartToEnd -> defer?.invoke()
+                else -> {}
+            }
+            false
+        },
+        positionalThreshold = { width -> width * 0.45f },
+    )
     SwipeToDismissBox(
         state = state,
         enableDismissFromEndToStart = start != null,
+        enableDismissFromStartToEnd = defer != null,
         backgroundContent = {
-            val toStart = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
+            val dir = state.dismissDirection
+            if (dir == SwipeToDismissBoxValue.Settled) return@SwipeToDismissBox
+            val toStart = dir == SwipeToDismissBoxValue.EndToStart
+            val p = state.progress.coerceIn(0f, 1f)
+            val color = if (toStart) Color(0xFF2E9E5B) else Color(0xFF3D7BF7)
             Box(
-                Modifier.fillMaxSize().background(if (toStart) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary, RoundedCornerShape(20.dp)).padding(horizontal = 20.dp),
+                Modifier.fillMaxSize().background(color.copy(alpha = 0.18f + 0.5f * p), RoundedCornerShape(20.dp)).padding(horizontal = 22.dp),
                 contentAlignment = if (toStart) Alignment.CenterEnd else Alignment.CenterStart,
-            ) { Text(if (toStart) "ابدأ الآن" else swipeLabel(deferMode), color = Color.White, fontWeight = FontWeight.Bold) }
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.graphicsLayer { alpha = (p * 2.2f).coerceIn(0f, 1f) }) {
+                    Text(if (toStart) "▶" else "⇢", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(if (toStart) "ابدأ" else swipeLabel(deferMode), color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
         },
     ) { content() }
 }
