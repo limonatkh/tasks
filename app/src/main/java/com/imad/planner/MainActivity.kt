@@ -2,6 +2,10 @@
 
 package com.imad.planner
 
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -128,7 +132,13 @@ class MainActivity : ComponentActivity() {
         else intent.removeExtra("startQuran")
         setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                PlannerTheme { Planner(repo, route.value) { route.value = null } }
+                PlannerTheme {
+                    // Asked once on this phone; after the right password it never asks again.
+                    val prefs = remember { getSharedPreferences("lock", MODE_PRIVATE) }
+                    var unlocked by remember { mutableStateOf(prefs.getBoolean("unlocked", false)) }
+                    if (unlocked) Planner(repo, route.value) { route.value = null }
+                    else LockScreen { prefs.edit().putBoolean("unlocked", true).apply(); unlocked = true }
+                }
             }
         }
     }
@@ -1209,6 +1219,28 @@ fun ReportsTab(s: Snapshot, nav: Nav, backup: () -> Unit, restore: () -> Unit) {
                 Secondary("استعادة من ملف JSON", restore, Modifier.fillMaxWidth())
                 Muted("المهام والأهداف محفوظة على هذا الجهاز. الاستعادة تقبل نسخ كل الإصدارات.")
             }
+        }
+    }
+}
+
+
+private const val LOCK_HASH = "a710fd3fa7929d26dc93a2ce85b6a413456ff65c3637037886588e7f6d3b59f9"
+
+private fun sha256(t: String) = java.security.MessageDigest.getInstance("SHA-256").digest(t.toByteArray()).joinToString("") { "%02x".format(it) }
+
+@Composable
+fun LockScreen(open: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    var wrong by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("كلمة المرور", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            OutlinedTextField(value = text, onValueChange = { text = it; wrong = false }, singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), isError = wrong,
+                modifier = Modifier.fillMaxWidth())
+            if (wrong) Text("كلمة المرور غلط", color = MaterialTheme.colorScheme.error)
+            Button(onClick = { if (sha256(text.trim()) == LOCK_HASH) open() else wrong = true }, modifier = Modifier.fillMaxWidth()) { Text("فتح") }
         }
     }
 }
