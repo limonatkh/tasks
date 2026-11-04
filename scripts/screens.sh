@@ -21,9 +21,15 @@ go ig; shot 07-ig-feed
 adb shell am start -n $P/.PlayerActivity --es series test --es title "تجربة" --es list PLlrxD0HtieHhS8VzuMCfQD4uJ9yne1mE6 --ei index 0 --ei pos 30
 shot 08-player 20
 adb shell input tap 540 1200; shot 09-player-controls 1
-adb shell settings put system accelerometer_rotation 0
-adb shell settings put system user_rotation 1; shot 10-player-landscape 6
+adb emu rotate; shot 10-player-landscape 6
 adb shell input tap 1200 540; shot 11-player-landscape-controls 1
-adb shell settings put system user_rotation 0
+adb emu rotate; adb emu rotate; adb emu rotate; sleep 2
+adb shell input keyevent BACK
+# Half a swipe on a task row each way, to see the words under it.
+adb shell am start -S -n $P/.MainActivity; sleep 6
+adb shell input motionevent DOWN 300 1512; for x in 380 460 540 620; do adb shell input motionevent MOVE $x 1512; done
+shot 12-swipe-right 1; adb shell input motionevent MOVE 300 1512; adb shell input motionevent UP 300 1512; sleep 2
+adb shell input motionevent DOWN 780 1512; for x in 700 620 540 460; do adb shell input motionevent MOVE $x 1512; done
+shot 13-swipe-left 1; adb shell input motionevent MOVE 780 1512; adb shell input motionevent UP 780 1512
 adb logcat -d -t 400 > shots/logcat.txt
 ls -la shots

@@ -133,7 +133,7 @@ class PlayerActivity : ComponentActivity() {
         setBackgroundColor(android.graphics.Color.BLACK)
         webChromeClient = WebChromeClient()
         addJavascriptInterface(bridge, "Android")
-        loadDataWithBaseURL("https://planner.local/", page(link!!), "text/html", "utf-8", null)
+        loadDataWithBaseURL("https://www.youtube.com", page(link!!), "text/html", "utf-8", null)
         web = this
     }
 
@@ -145,7 +145,7 @@ class PlayerActivity : ComponentActivity() {
 <script>
 var player;
 function onYouTubeIframeAPIReady(){
-  player=new YT.Player('p',{width:'100%',height:'100%',playerVars:{playsinline:1,rel:0,autoplay:1,controls:0,modestbranding:1,iv_load_policy:3,fs:0,disablekb:1},
+  player=new YT.Player('p',{width:'100%',height:'100%',playerVars:{playsinline:1,origin:'https://www.youtube.com',rel:0,autoplay:1,controls:0,modestbranding:1,iv_load_policy:3,fs:0,disablekb:1},
     events:{
       onReady:function(e){ e.target.loadPlaylist({listType:'playlist',list:'${l.list}',index:${l.index},startSeconds:${l.pos}}); },
       onStateChange:function(e){ report(); if(e.data===0){ Android.ended(player.getPlaylistIndex(), (player.getPlaylist()||[]).length); } },
@@ -224,7 +224,7 @@ private fun PlayerScreen(title: String, start: YtLink, makeWeb: (Any) -> WebView
                 }
                 }
                 Column(Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    error?.let { Text(if (it == 101 || it == 150 || it == 153) "هاي الحلقة صاحبها مانع تشغيلها برا يوتيوب." else "تعذّر تشغيل الحلقة ($it).", color = Color(0xFFFF8A80)) }
+                    error?.let { Text(if (it == 101 || it == 150 || it == 153) "هاي الحلقة صاحبها مانع تشغيلها برا يوتيوب ($it). اضغط ⏭ للي بعدها." else "تعذّر تشغيل الحلقة ($it).", color = Color(0xFFFF8A80)) }
                     androidx.compose.runtime.CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(clock(seeking ?: time), color = Color.White, fontSize = 13.sp)
