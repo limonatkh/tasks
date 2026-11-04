@@ -275,3 +275,39 @@ fun YearPartsSheet(
         }
     }
 }
+
+// ---------------- New watch list (from anywhere) ----------------
+
+/** A playlist to watch becomes a yearly plan counted in episodes. */
+@Composable
+fun WatchListSheet(today: java.time.LocalDate, close: () -> Unit, save: (String, String, String, Int, Int, Int, java.time.LocalDate, Int) -> Unit) {
+    var url by remember { mutableStateOf("") }
+    var title by remember { mutableStateOf("") }
+    var from by remember { mutableStateOf("1") }
+    var total by remember { mutableStateOf("") }
+    var perDay by remember { mutableStateOf("1") }
+    var minutes by remember { mutableStateOf("30") }
+    val id = YtLink.listId(url)
+    val f = digits(from).toIntOrNull() ?: 1
+    val n = digits(total).toIntOrNull() ?: 0
+    val pd = (digits(perDay).toIntOrNull() ?: 1).coerceAtLeast(1)
+    val days = if (n >= f) ((n - f + 1) + pd - 1) / pd else 0
+    Sheet("قائمة مشاهدة يوتيوب", close) {
+        Field(url, "رابط قائمة التشغيل", { url = it })
+        if (url.isNotBlank() && id == null) Text("الرابط لازم يكون فيه list=…", color = MaterialTheme.colorScheme.error)
+        Field(title, "الاسم (مثلاً: سلسلة مقدمة ابن خلدون)", { title = it })
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Field(from, "بلّش من الحلقة", { from = it }, numeric = true, modifier = Modifier.weight(1f))
+            Field(total, "عدد الحلقات", { total = it }, numeric = true, modifier = Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Field(perDay, "حلقات باليوم", { perDay = it }, numeric = true, modifier = Modifier.weight(1f))
+            Field(minutes, "مدة الحلقة تقريباً (د)", { minutes = it }, numeric = true, modifier = Modifier.weight(1f))
+        }
+        if (days > 0) Muted("بتخلص بعد $days يوم تقريباً، يوم ${dayLabel(today.plusDays(days.toLong()))}.")
+        Muted("بتنضاف لخطة السنة، وكل يوم بتطلع مهمة فيها حلقات اليوم. الإنجاز بالحلقات اللي حضرتها لآخرها، مش بالوقت.")
+        Action("حفظ", {
+            if (id != null) { save(title.trim().ifBlank { "قائمة مشاهدة" }, url.trim(), id, f, n.coerceAtLeast(f), pd, today.plusDays(days.coerceAtLeast(1).toLong()), digits(minutes).toIntOrNull() ?: 30); close() }
+        }, Modifier.fillMaxWidth(), enabled = id != null && n >= f)
+    }
+}

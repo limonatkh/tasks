@@ -255,9 +255,11 @@ fun monthAmount(s: Snapshot, p: Plan, ym: YearMonth): Int? {
 /** Everything that can be put in a week, including goals not being worked on now (not daily routine). */
 fun planItemsAll(s: Snapshot): List<PlanItem> {
     val plans = s.plans.map { PlanItem("plan-${it.id}", it.title + if (!it.accepted) " (مقترح)" else "", Cat.ofPlan(it)) }
-    val rules = s.rules.filter { r -> !r.id.startsWith("plan-") && !(r.active && (if (r.weekdays != 0) Integer.bitCount(r.weekdays) >= 5 else r.everyHours <= 24)) }
+    val rules = s.rules.filter { r -> !r.id.startsWith("plan-") }
         .map { PlanItem(it.id, it.title + if (!it.active) " (متوقف)" else "", it.category) }
-    return (plans + rules).distinctBy { it.series }
+    // Records (a number to reach) can also get a target for a week or a month.
+    val goals = s.goals.map { PlanItem("g:${it.id}", it.name + " (رقم)", it.category) }
+    return (plans + rules + goals).distinctBy { it.series }
 }
 
 private val shortDate = DateTimeFormatter.ofPattern("d MMM", Locale("ar"))
@@ -337,7 +339,9 @@ fun MonthPlanSheet(s: Snapshot, close: () -> Unit, chain: (String) -> Unit = {},
         title = { Text("أي هدف؟") },
         text = {
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                allItems.filter { c -> (items + extra).none { it.series == c.series } }.forEach { c ->
+                val left = allItems.filter { c -> (items + extra).none { it.series == c.series } }
+                if (left.isEmpty()) Text("كل أهدافك ومهامك المتكررة موجودة بهالشهر. لهدف جديد: من + فوق ← هدف جديد.", style = MaterialTheme.typography.bodyLarge)
+                left.forEach { c ->
                     Text(c.title, Modifier.fillMaxWidth().clickable { extra = extra + c; picking = false }.padding(vertical = 12.dp), style = MaterialTheme.typography.bodyLarge)
                     HorizontalDivider()
                 }

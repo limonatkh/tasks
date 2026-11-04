@@ -132,7 +132,6 @@ fun PlanTab(s: Snapshot, nav: Nav) {
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Secondary("الرياضة: الأرقام والحصص", nav.sports, Modifier.weight(1f))
-            Secondary("متابعة أشخاص", nav.ig, Modifier.weight(0.7f))
         }
         when (mode) {
             0 -> WeekView(s, nav)

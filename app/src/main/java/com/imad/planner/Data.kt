@@ -690,6 +690,9 @@ class Repository(private val context: Context) {
         if (store.meta("seed-v6") == null) { store.put(Meta("dayMode", "prayer")); store.put(Meta("seed-v6", "1")) }
         // 0.16: sessions come from the week plan; automatic sport sessions of the coming days are taken off (today's stay).
         if (store.meta("undo")?.isNotEmpty() == true) store.put(Meta("undo", ""))
+        // People added in 0.19 keep following, counted from now.
+        if (store.meta("igPeople2") == null && store.meta("igPeople") != null)
+            store.put(Meta("igPeople2", Ig.encodePeople(Ig.parse(store.meta("igPeople")).map { IgPerson(it, System.currentTimeMillis()) })))
         if (store.meta("safety")?.isNotEmpty() == true) store.put(Meta("safety", ""))
         if (store.meta("seed-v7") == null) {
             val today = Clock.today().toString()
@@ -1326,12 +1329,88 @@ class Repository(private val context: Context) {
         store.put(Meta(key, Ig.encode(if (person in l) l - person else l + person)))
     }
 
+    suspend fun igSetPeople(list: List<IgPerson>) = locked { store.put(Meta("igPeople2", Ig.encodePeople(list.distinctBy { it.user }))) }
+
+    suspend fun igMark(id: String, state: String) = locked {
+        store.put(Meta("igFeed", Ig.encodePosts(Ig.posts(store.meta("igFeed")).map { if (it.id == id) it.copy(state = state) else it })))
+    }
+
+    /**
+     * Asks Instagram for each person's latest posts (one after another, slowly) and keeps the new ones made after the
+     * person was added. Not more often than every 4 hours unless asked.
+     */
+    suspend fun igRefresh(force: Boolean): String {
+        val people = Ig.people(store.meta("igPeople2"))
+        if (people.isEmpty()) return ""
+        val last = store.meta("igFetchedAt")?.toLongOrNull() ?: 0L
+        val now = System.currentTimeMillis()
+        if (!force && now - last < 4 * 3_600_000L) return "آخر تحميل الساعة ${fmt12(Clock.minuteOfDay(last))}"
+        var failed = 0
+        val got = mutableListOf<IgPost>()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            for ((i, p) in people.withIndex()) {
+                if (i > 0) kotlinx.coroutines.delay(1500)
+                val list = Ig.fetch(p.user)
+                if (list == null) failed++ else got += list.filter { it.at >= p.addedAt }
+            }
+        }
+        var added = 0
+        locked {
+            val old = Ig.posts(store.meta("igFeed"))
+            val known = old.map { it.id }.toSet()
+            val fresh = got.filter { it.id !in known }
+            added = fresh.size
+            store.put(Meta("igFeed", Ig.encodePosts((old + fresh).sortedByDescending { it.at }.take(400))))
+            store.put(Meta("igFetchedAt", now.toString()))
+        }
+        return when {
+            failed == people.size -> "إنستغرام ما ردّ. ممكن لازم تسجّل دخول من جديد."
+            added == 0 -> "ما في جديد" + if (failed > 0) " ($failed حساب ما ردّ)" else ""
+            else -> "وصل $added جديد" + if (failed > 0) " ($failed حساب ما ردّ)" else ""
+        }
+    }
+
     // ---------- YouTube playlists ----------
 
     suspend fun setYt(series: String, link: YtLink?) = locked {
         val all = YtLink.parseAll(store.meta("ytLinks")).toMutableMap()
         if (link == null) all.remove(series) else all[series] = link
         store.put(Meta("ytLinks", YtLink.encodeAll(all)))
+    }
+
+    /**
+     * A playlist to watch: a yearly plan counted in episodes (one task a day with the episodes to watch),
+     * linked to the playlist so the player opens where the user stopped.
+     */
+    suspend fun addWatchList(title: String, url: String, list: String, fromEpisode: Int, total: Int, perDay: Int, endDay: LocalDate, minutesPer: Int) {
+        val id = "yt-" + UUID.randomUUID().toString().take(8)
+        val plan = Plan(id = id, title = title, kind = "amount", unit = "حلقة", total = total.coerceAtLeast(fromEpisode), done = (fromEpisode - 1).coerceAtLeast(0),
+            perDay = perDay.coerceAtLeast(1), endDay = endDay.toString(), minutesPerUnit = minutesPer.coerceIn(1, 240), accepted = true, configured = true, category = "other")
+        savePlan(plan)
+        setYt("plan-$id", YtLink(list, (fromEpisode - 1).coerceAtLeast(0), 0, total, url))
+    }
+
+    /**
+     * An episode was watched to its end (or the user said the rest is not needed): the plan moves one episode on,
+     * the task counts it, and the task is done when today's episodes are all watched.
+     */
+    suspend fun episodeDone(taskId: String?, series: String, nextIndex: Int, total: Int) = locked {
+        val all = YtLink.parseAll(store.meta("ytLinks")).toMutableMap()
+        all[series]?.let { l -> all[series] = l.copy(index = nextIndex, pos = 0, total = if (total > 0) total else l.total, finished = total > 0 && nextIndex >= total) }
+        store.put(Meta("ytLinks", YtLink.encodeAll(all)))
+        val t = taskId?.let { store.task(it) } ?: return@locked
+        val plans = plansLocked()
+        val plan = plans.firstOrNull { "plan-${it.id}" == t.ruleId }
+        val now = System.currentTimeMillis()
+        val done = t.doneUnits + 1
+        if (plan != null) {
+            val mem = memLastOf(plans)
+            savePlansLocked(plans.map { p -> if (p.id != plan.id) p else PlanMath.applyUnits(p, 1, mem).let { np -> if (np.dayKey == t.day) np.copy(dayDone = np.dayDone + 1) else np } })
+        }
+        val finished = done >= t.units.coerceAtLeast(1)
+        store.put(t.copy(doneUnits = done, state = if (finished) "done" else t.state, finishedAt = if (finished) now else t.finishedAt, started = 0))
+        log(t, if (finished) "finish" else "note", "حلقة ${nextIndex}")
+        replanLocked()
     }
 
     // ---------- splitting a task ----------
@@ -2061,7 +2140,7 @@ class Repository(private val context: Context) {
         val logs = JSONArray()
         store.allLogs().forEach { l -> logs.put(JSONObject().put("id", l.id).put("goalId", l.goalId).put("day", l.day).put("value", l.value)) }
         val meta = JSONObject()
-        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets", "routineWeeks", "igPeople")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
+        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets", "routineWeeks", "igPeople2")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
         store.allMeta().filter { it.key.startsWith("pomo:") || it.key.startsWith("dayPlanned:") || it.key.startsWith("quran:") }.forEach { meta.put(it.key, it.value) }
         val events = JSONArray()
         store.allEvents().forEach { e ->

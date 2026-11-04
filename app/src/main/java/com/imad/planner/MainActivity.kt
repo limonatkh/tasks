@@ -252,11 +252,11 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     var chainFor by remember { mutableStateOf<String?>(null) }
     var sportsOpen by remember { mutableStateOf(false) }
     var ytFor by remember { mutableStateOf<Task?>(null) }
-    var ytPlay by remember { mutableStateOf<Task?>(null) }
     var splitFor by remember { mutableStateOf<Task?>(null) }
     var contFor by remember { mutableStateOf<Task?>(null) }
     var partsFor by remember { mutableStateOf<YearTarget?>(null) }
     var igOpen by remember { mutableStateOf(false) }
+    var watchNew by remember { mutableStateOf(false) }
     var moveDayFor by remember { mutableStateOf<Task?>(null) }
     var closeDay by remember { mutableStateOf(false) }
     var restoreText by remember { mutableStateOf<String?>(null) }
@@ -351,9 +351,9 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             val pausing = viaTimer && fresh.running
             val yt = snap.settings.ytLinks[seriesOf(t)]
             val begin: suspend () -> Unit = {
-                if (viaTimer) repo.timer(t.id) else repo.startNow(t.id)
-                // A task with a playlist opens its player at the episode and second reached.
-                if (yt != null && !pausing) ytPlay = t
+                // A watch task has no timer: it opens the player at the episode and second reached.
+                if (yt != null) context.startActivity(PlayerActivity.intent(context, seriesOf(t), t.baseTitle, t.id))
+                else if (viaTimer) repo.timer(t.id) else repo.startNow(t.id)
             }
             if (link == null || pausing) begin()
             else {
@@ -379,6 +379,10 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             route == null -> {}
             route == "month" -> monthPlan = true
             route == "week" -> weekPlan = true
+            route.startsWith("tab:") -> tab = route.removePrefix("tab:").toIntOrNull() ?: 0
+            route == "watch" -> watchNew = true
+            route == "ig" -> { tab = 3; igOpen = true }
+            route == "goal" -> newGoal = true
             route == "day" -> {
                 val d = if (Clock.minuteOfDay(System.currentTimeMillis()) < snap.settings.dayStart) Clock.today() else Clock.today().plusDays(1)
                 runCatching { repo.prepareDay(d) }; dayPlan = d
@@ -437,9 +441,12 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
                         DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
                             DropdownMenuItem(text = { Text("مهمة جديدة") }, onClick = { addMenu = false; creating = emptyTask(if (tab == 1) today.plusDays(1) else today) })
                             DropdownMenuItem(text = { Text("هدف جديد") }, onClick = { addMenu = false; newGoal = true })
+                            DropdownMenuItem(text = { Text("▶ قائمة مشاهدة يوتيوب") }, onClick = { addMenu = false; watchNew = true })
                         }
                     }
                     IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Filled.Settings, contentDescription = "الإعدادات") }
+                    // The feed is out of the way on purpose: only on the reports page.
+                    if (tab == 3) TextButton(onClick = { igOpen = true }) { Text("الفيد") }
                 },
             )
         },
@@ -485,7 +492,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             close = { creating = null },
             save = { task, _, phases -> act { repo.saveNew(task, phases); creating = null } },
             saveRule = { r -> act { repo.saveRule(r); creating = null } },
-            delete = { creating = null }, actions = null)
+            delete = { creating = null }, actions = null, watchList = { watchNew = true })
     }
     ruleEditor?.let { r ->
         RuleEditor(r, close = { ruleEditor = null },
@@ -509,7 +516,10 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     if (newGoal) NewGoalSheet(today, close = { newGoal = false },
         saveGoal = { g, r -> act { repo.addGoal(g, r); newGoal = false } },
         savePlan = { p -> act { repo.savePlan(p); newGoal = false } },
-        saveRule = { r -> act { repo.saveRule(r); newGoal = false } })
+        saveRule = { r -> act { repo.saveRule(r); newGoal = false } }, watchList = { watchNew = true })
+    if (watchNew) WatchListSheet(today, close = { watchNew = false }) { title, url, list, from, total, perDay, end, minutes ->
+        act { repo.addWatchList(title, url, list, from, total, perDay, end, minutes); snackbar.showSnackbar("انضافت «$title» لخطة السنة") }
+    }
     monthEdit?.let { m ->
         MonthEditSheet(m, snap.months[Months.key(m.key, m.ym.toString())], close = { monthEdit = null },
             save = { v, reviewed -> act { repo.setMonth(m.key, m.ym.toString(), v, reviewed); monthEdit = null } })
@@ -560,13 +570,8 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         set = { k, v -> act { repo.setSetting(k, v) } },
         weekPlan = { weekPlan = true },
     ))
-    if (igOpen) IgSheet(snap, close = { igOpen = false }, save = { l -> act { repo.setIgPeople(l) } }, seen = { p -> act { repo.igSeen(p) } })
+    if (igOpen) IgFeedScreen(snap, close = { igOpen = false }, repo = repo)
     ytFor?.let { t -> YtLinkDialog(t, snap.settings.ytLinks[seriesOf(t)], close = { ytFor = null }) { l -> act { repo.setYt(seriesOf(t), l) } } }
-    ytPlay?.let { t ->
-        snap.settings.ytLinks[seriesOf(t)]?.let { l ->
-            YtPlayerSheet(t.baseTitle, l, close = { ytPlay = null }) { cur -> act { repo.setYt(seriesOf(t), cur) } }
-        } ?: run { ytPlay = null }
-    }
     splitFor?.let { t -> SplitDialog(t, close = { splitFor = null }) { n -> act { repo.splitTask(t.id, n) } } }
     contFor?.let { t -> PeriodPicker(snap.settings.periodsOn(today), Clock.minuteOfDay(now), close = { contFor = null }) { k -> act { repo.continueLater(t.id, k) } } }
     partsFor?.let { y ->
@@ -607,7 +612,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             note = { noteFor = t },
             close = { act { repo.deferTask(t.id, "close") } },
             delete = { act { repo.delete(t.id) } },
-        ))
+        ), yt = snap.settings.ytLinks[seriesOf(t)])
     }
     if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true }, openPrayers = { prayerOpen = true },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false) })

@@ -13,8 +13,8 @@ android {
         applicationId = "com.imad.planner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.19"
+        versionCode = 21
+        versionName = "0.20"
     }
 
     signingConfigs {
@@ -59,6 +59,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.room:room-runtime:2.6.1")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

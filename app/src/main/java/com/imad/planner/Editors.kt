@@ -107,7 +107,7 @@ fun TaskEditor(
     t: Task, isNew: Boolean, rule: Rule?, now: Long, close: () -> Unit,
     save: (Task, Boolean, List<Int>) -> Unit, saveRule: (Rule) -> Unit, delete: () -> Unit, actions: TaskActions?,
     routineNow: Boolean = false, colorNow: Int = -1, saveTag: ((Boolean, Int) -> Unit)? = null,
-    iconNow: String? = null, saveIcon: ((String) -> Unit)? = null,
+    iconNow: String? = null, saveIcon: ((String) -> Unit)? = null, watchList: (() -> Unit)? = null,
 ) {
     var routine by remember { mutableStateOf(routineNow) }
     var color by remember { mutableIntStateOf(colorNow) }
@@ -135,6 +135,7 @@ fun TaskEditor(
     val valid = Maths.valid(title, m)
 
     Sheet(if (isNew) "إضافة مهمة" else "تفاصيل المهمة", close) {
+        if (isNew && watchList != null) Secondary("▶ قائمة مشاهدة يوتيوب", { close(); watchList() }, Modifier.fillMaxWidth())
         if (isNew) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = !recurring, onClick = { recurring = false }, label = { Text("مرة وحدة") })
             FilterChip(selected = recurring, onClick = { recurring = true }, label = { Text("متكررة") })
@@ -441,7 +442,7 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
 // ---------------- New goal (from anywhere) ----------------
 
 @Composable
-fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) -> Unit, savePlan: (Plan) -> Unit, saveRule: (Rule) -> Unit) {
+fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) -> Unit, savePlan: (Plan) -> Unit, saveRule: (Rule) -> Unit, watchList: () -> Unit = {}) {
     var type by remember { mutableIntStateOf(0) } // 0 number, 1 amount, 2 habit
     var name by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("sport") }
@@ -467,6 +468,7 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
             listOf("رقم أوصله", "كمية أخلّصها", "مشروع بمراحل", "عادة متكررة", "قناة محتوى").forEachIndexed { i, s ->
                 FilterChip(selected = type == i, onClick = { type = i }, label = { Text(s) })
             }
+            FilterChip(selected = false, onClick = { close(); watchList() }, label = { Text("▶ قائمة مشاهدة") })
         }
         Field(name, "اسم الهدف", { name = it })
         if (type == 0 || type == 3 || type == 2) CategoryPicker(category, sport) { c, sp -> category = c; sport = sp }
@@ -699,7 +701,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.19")
+        Muted("الإصدار 0.20")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

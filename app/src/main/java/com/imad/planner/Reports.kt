@@ -2,6 +2,14 @@
 
 package com.imad.planner
 
+import androidx.compose.runtime.mutableFloatStateOf
+
+import androidx.compose.ui.layout.positionInRoot
+
+import androidx.compose.ui.layout.onGloballyPositioned
+
+import androidx.compose.ui.AbsoluteAlignment
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -74,14 +82,15 @@ class TaskOps(
 )
 
 @Composable
-fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps) {
+fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps, yt: YtLink? = null) {
     var confirmDelete by remember { mutableStateOf(false) }
     Sheet(t.title, close) {
         if (t.details.isNotBlank()) Muted(t.details)
-        Muted(durLabel(t.minutes) + (Prayer.names[t.period]?.let { " · فترة $it" } ?: "") + if (t.done) " · منجزة ✓" else "")
+        if (yt != null) Muted("الحلقة ${yt.index + 1}" + (if (yt.total > 0) " من ${yt.total}" else "") + (if (yt.pos > 5) " · وقفت عند ${yt.pos / 60}:${"%02d".format(yt.pos % 60)}" else "") + if (t.units > 0) " · اليوم ${t.doneUnits}/${t.units} حلقة" else "")
+        else Muted(durLabel(t.minutes) + (Prayer.names[t.period]?.let { " · فترة $it" } ?: "") + if (t.done) " · منجزة ✓" else "")
         fun go(f: (() -> Unit)?) = { close(); f?.invoke(); Unit }
         if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ops.start?.takeIf { !t.running }?.let { Action("ابدأ", go(it), Modifier.weight(1f)) }
+            ops.start?.takeIf { !t.running }?.let { Action(if (yt != null) "▶ كمّل الحلقة ${yt.index + 1}" else "ابدأ", go(it), Modifier.weight(1f)) }
             ops.finish?.let { Secondary("أنجزتها ✓", go(it), Modifier.weight(1f)) }
         }
         Text("مكانها", style = MaterialTheme.typography.labelLarge)
@@ -136,28 +145,32 @@ fun SwipeRow(start: (() -> Unit)?, defer: (() -> Unit)?, deferMode: String, cont
         },
         positionalThreshold = { width -> width * 0.45f },
     )
+    // Which side is uncovered is read from where the card really is on screen, so RTL can't put the words under the card.
+    var baseX by remember { mutableFloatStateOf(0f) }
+    var shift by remember { mutableFloatStateOf(0f) }
     SwipeToDismissBox(
         state = state,
         enableDismissFromEndToStart = start != null,
         enableDismissFromStartToEnd = defer != null,
         backgroundContent = {
             val dir = state.dismissDirection
-            if (dir == SwipeToDismissBoxValue.Settled) return@SwipeToDismissBox
-            val toStart = dir == SwipeToDismissBoxValue.EndToStart
-            val p = state.progress.coerceIn(0f, 1f)
-            val color = if (toStart) Color(0xFF2E9E5B) else Color(0xFF3D7BF7)
-            Box(
-                Modifier.fillMaxSize().background(color.copy(alpha = 0.18f + 0.5f * p), RoundedCornerShape(20.dp)).padding(horizontal = 22.dp),
-                contentAlignment = if (toStart) Alignment.CenterEnd else Alignment.CenterStart,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.graphicsLayer { alpha = (p * 2.2f).coerceIn(0f, 1f) }) {
-                    Text(if (toStart) "▶" else "⇢", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(if (toStart) "ابدأ" else swipeLabel(deferMode), color = Color.White, fontWeight = FontWeight.Bold)
+            Box(Modifier.fillMaxSize().onGloballyPositioned { baseX = it.positionInRoot().x }) {
+                if (dir == SwipeToDismissBoxValue.Settled || kotlin.math.abs(shift) < 2f) return@Box
+                val toStart = dir == SwipeToDismissBoxValue.EndToStart
+                if ((toStart && start == null) || (!toStart && defer == null)) return@Box
+                val color = if (toStart) Color(0xFF2E9E5B) else Color(0xFF3D7BF7)
+                Box(
+                    Modifier.fillMaxSize().background(color, RoundedCornerShape(20.dp)).padding(horizontal = 22.dp),
+                    contentAlignment = if (shift > 0) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(if (toStart) "▶" else "⏭", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                        Text(if (toStart) "ابدأ الآن" else swipeLabel(deferMode), color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    }
                 }
             }
         },
-    ) { content() }
+    ) { Box(Modifier.onGloballyPositioned { shift = it.positionInRoot().x - baseX }) { content() } }
 }
 
 /** Ask before postponing; the note is optional. */
