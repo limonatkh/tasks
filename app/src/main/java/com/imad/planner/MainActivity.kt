@@ -132,12 +132,16 @@ class MainActivity : ComponentActivity() {
         else intent.removeExtra("startQuran")
         setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                PlannerTheme {
+                val ui = remember { getSharedPreferences("ui", MODE_PRIVATE) }
+                var mono by remember { mutableStateOf(ui.getBoolean("mono", false)) }
+                CompositionLocalProvider(LocalThemeChoice provides ThemeChoice(mono) { v -> ui.edit().putBoolean("mono", v).apply(); mono = v }) {
+                PlannerTheme(mono) {
                     // Asked once on this phone; after the right password it never asks again.
                     val prefs = remember { getSharedPreferences("lock", MODE_PRIVATE) }
                     var unlocked by remember { mutableStateOf(prefs.getBoolean("unlocked", false)) }
                     if (unlocked) Planner(repo, route.value) { route.value = null }
                     else LockScreen { prefs.edit().putBoolean("unlocked", true).apply(); unlocked = true }
+                }
                 }
             }
         }

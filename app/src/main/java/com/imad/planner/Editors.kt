@@ -701,7 +701,13 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Secondary("استثناء من توفير البطارية", {
             context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }, Modifier.fillMaxWidth())
-        Muted("الإصدار 0.21")
+        val theme = LocalThemeChoice.current
+        Text("الشكل", style = MaterialTheme.typography.labelLarge)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !theme.mono, onClick = { theme.set(false) }, label = { Text("ملوّن") })
+            FilterChip(selected = theme.mono, onClick = { theme.set(true) }, label = { Text("أبيض وأسود") })
+        }
+        Muted("الإصدار 0.22")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

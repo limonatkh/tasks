@@ -228,7 +228,12 @@ fun IgFeedScreen(s: Snapshot, close: () -> Unit, repo: Repository) {
     }
     if (settings) IgSettings(people, loggedIn = Ig.loggedIn(), close = { settings = false }, login = { login = true },
         save = { l -> scope.launch { repo.igSetPeople(l) } })
-    if (login) IgLogin(close = { login = false; if (Ig.loggedIn()) refresh(true) })
+    if (login) LaunchedEffect(Unit) {
+        context.startActivity(android.content.Intent(context, IgLoginActivity::class.java))
+        // Waits for the login screen to give back the sign-in, then loads the feed.
+        repeat(600) { delay(2000); if (Ig.loggedIn()) { login = false; refresh(true); return@LaunchedEffect } }
+        login = false
+    }
     video?.let { p -> IgVideo(p, close = { video = null }) }
 }
 

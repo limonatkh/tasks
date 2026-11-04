@@ -107,11 +107,49 @@ val TagNames = listOf("برتقالي", "أخضر", "أزرق", "ذهبي", "ب�
 
 fun tagColor(i: Int): Color? = TagColors.getOrNull(i)
 
+/** Black-and-white look on or off, and the switch for it (kept on the phone). */
+class ThemeChoice(val mono: Boolean, val set: (Boolean) -> Unit)
+val LocalThemeChoice = androidx.compose.runtime.staticCompositionLocalOf { ThemeChoice(false) {} }
+
+private fun monoColors(dark: Boolean) = if (dark) darkColorScheme(
+    primary = Color(0xFFFFFFFF), onPrimary = Color(0xFF000000),
+    primaryContainer = Color(0xFF2A2A2A), onPrimaryContainer = Color(0xFFFFFFFF),
+    secondary = Color(0xFFD0D0D0), onSecondary = Color(0xFF000000),
+    secondaryContainer = Color(0xFF262626), onSecondaryContainer = Color(0xFFEEEEEE),
+    tertiary = Color(0xFFBDBDBD), onTertiary = Color(0xFF000000),
+    tertiaryContainer = Color(0xFF222222), onTertiaryContainer = Color(0xFFEEEEEE),
+    background = Color(0xFF000000), onBackground = Color(0xFFFFFFFF),
+    surface = Color(0xFF111111), onSurface = Color(0xFFFFFFFF),
+    surfaceVariant = Color(0xFF1C1C1C), onSurfaceVariant = Color(0xFFAAAAAA),
+    surfaceTint = Color(0xFF111111), outline = Color(0xFF5A5A5A), outlineVariant = Color(0xFF2C2C2C),
+    surfaceBright = Color(0xFF1C1C1C), surfaceDim = Color(0xFF000000),
+    surfaceContainerLowest = Color(0xFF000000), surfaceContainerLow = Color(0xFF0B0B0B),
+    surfaceContainer = Color(0xFF111111), surfaceContainerHigh = Color(0xFF1A1A1A),
+    surfaceContainerHighest = Color(0xFF242424),
+    error = Color(0xFFFF8A80), onError = Color(0xFF000000),
+) else lightColorScheme(
+    primary = Color(0xFF000000), onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFEDEDED), onPrimaryContainer = Color(0xFF000000),
+    secondary = Color(0xFF3A3A3A), onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFEFEFEF), onSecondaryContainer = Color(0xFF111111),
+    tertiary = Color(0xFF555555), onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFF0F0F0), onTertiaryContainer = Color(0xFF111111),
+    background = Color(0xFFFFFFFF), onBackground = Color(0xFF000000),
+    surface = Color(0xFFFFFFFF), onSurface = Color(0xFF000000),
+    surfaceVariant = Color(0xFFF2F2F2), onSurfaceVariant = Color(0xFF5E5E5E),
+    surfaceTint = Color(0xFFFFFFFF), outline = Color(0xFFBDBDBD), outlineVariant = Color(0xFFE2E2E2),
+    surfaceBright = Color(0xFFFFFFFF), surfaceDim = Color(0xFFEAEAEA),
+    surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFFAFAFA),
+    surfaceContainer = Color(0xFFF5F5F5), surfaceContainerHigh = Color(0xFFEEEEEE),
+    surfaceContainerHighest = Color(0xFFE6E6E6),
+    error = Color(0xFFB3261E), onError = Color(0xFFFFFFFF),
+)
+
 @Composable
-fun PlannerTheme(content: @Composable () -> Unit) {
+fun PlannerTheme(mono: Boolean = false, content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
     // Clear but calm: warm greys, readable text, one terracotta accent, sage and blue as helpers.
-    val colors = if (dark) darkColorScheme(
+    val colors = if (mono) monoColors(dark) else if (dark) darkColorScheme(
         primary = Color(0xFFE8916B), onPrimary = Color(0xFF2B1308),
         primaryContainer = Color(0xFF4A2E22), onPrimaryContainer = Color(0xFFFFDCCD),
         secondary = Color(0xFF9FC2A7), onSecondary = Color(0xFF142219),

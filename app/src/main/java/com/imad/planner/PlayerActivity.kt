@@ -10,6 +10,8 @@ import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
+import android.webkit.WebResourceRequest
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -133,32 +135,25 @@ class PlayerActivity : ComponentActivity() {
         setBackgroundColor(android.graphics.Color.BLACK)
         webChromeClient = WebChromeClient()
         addJavascriptInterface(bridge, "Android")
-        if (intent.getBooleanExtra("test", false)) loadDataWithBaseURL("https://com.imad.planner", "<html><body style='margin:0;background:#c00;color:#fff;font-size:40px'>WEBVIEW OK<video id=v style='width:100%' muted autoplay loop playsinline src='https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'></video></body></html>", "text/html", "utf-8", null)
-        else loadDataWithBaseURL("https://com.imad.planner", page(link!!), "text/html", "utf-8", null)
+        if (intent.getBooleanExtra("test", false)) { loadDataWithBaseURL("https://com.imad.planner", "<html><body style='margin:0;background:#c00;color:#fff;font-size:40px'>WEBVIEW OK</body></html>", "text/html", "utf-8", null); web = this; return@apply }
+        // YouTube's own embed page is the whole page (no frame inside our page), so its picture is drawn like any page.
+        webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String) { view.evaluateJavascript(HOOK, null) }
+            override fun shouldOverrideUrlLoading(view: WebView, r: WebResourceRequest) = true
+        }
+        loadUrl(embedUrl(link!!), mapOf("Referer" to "https://com.imad.planner/"))
         web = this
     }
 
-    private fun page(l: YtLink) = """
-<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}#p{position:absolute;inset:0;width:100%;height:100%}</style></head>
-<body><div id="p"></div>
-<script src="https://www.youtube.com/iframe_api"></script>
-<script>
-var player;
-function onYouTubeIframeAPIReady(){
-  player=new YT.Player('p',{width:'100%',height:'100%',playerVars:{playsinline:1,origin:'https://com.imad.planner',rel:0,autoplay:1,controls:0,modestbranding:1,iv_load_policy:3,fs:0,disablekb:1},
-    events:{
-      onReady:function(e){ var L='${l.list}'; if(L.indexOf('v:')===0) e.target.loadPlaylist(L.substring(2).split(','),${l.index},${l.pos}); else e.target.loadPlaylist({listType:'playlist',list:L,index:${l.index},startSeconds:${l.pos}}); },
-      onStateChange:function(e){ report(); if(e.data===0){ Android.ended(player.getPlaylistIndex(), (player.getPlaylist()||[]).length); } },
-      onError:function(e){ Android.error(e.data); }
-    }});
-}
-function report(){
-  try{ var pl=player.getPlaylist(); Android.progress(player.getPlaylistIndex(), player.getCurrentTime(), player.getDuration(), pl?pl.length:0, player.getPlayerState()); }catch(x){}
-}
-setInterval(report,1000);
-</script></body></html>
-"""
+    private fun embedUrl(l: YtLink): String {
+        val common = "autoplay=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&fs=0&disablekb=1&enablejsapi=1&origin=https://com.imad.planner&start=${l.pos}"
+        return if (l.list.startsWith("v:")) {
+            val ids = l.list.removePrefix("v:").split(",").filter { it.isNotBlank() }
+            val first = ids.getOrElse(l.index) { ids.first() }
+            "https://www.youtube.com/embed/$first?playlist=${ids.drop(l.index + 1).joinToString(",")}&$common"
+        } else "https://www.youtube.com/embed/videoseries?list=${l.list}&index=${l.index}&$common"
+    }
+
 }
 
 private class Bridge(
@@ -260,3 +255,27 @@ private fun RoundButton(label: String, size: Int, onClick: () -> Unit) {
         Text(label, color = Color.White, fontSize = (size / 3).sp, fontWeight = FontWeight.Bold)
     }
 }
+
+/** Runs inside YouTube's embed page: names its player `player` and reports to the app every second. */
+private val HOOK = """
+(function(){
+  if (window.__hooked) return; window.__hooked = true;
+  var st = document.createElement('style');
+  st.textContent = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-pause-overlay,.ytp-watermark,.ytp-ce-element,.ytp-endscreen-content,.ytp-show-cards-title,.ytp-paid-content-overlay{display:none!important}';
+  document.head.appendChild(st);
+  window.__ended = -1;
+  window.__err = function(e){ try{ Android.error(e && e.data !== undefined ? e.data : e); }catch(x){} };
+  setInterval(function(){
+    var p = document.getElementById('movie_player');
+    if (!p || !p.getCurrentTime) return;
+    window.player = p;
+    if (!window.__ev) { window.__ev = true; try { p.addEventListener('onError', '__err'); } catch(x){} }
+    try {
+      var pl = p.getPlaylist ? p.getPlaylist() : null, i = p.getPlaylistIndex ? p.getPlaylistIndex() : 0, s = p.getPlayerState();
+      Android.progress(i < 0 ? 0 : i, p.getCurrentTime(), p.getDuration(), pl ? pl.length : 0, s);
+      if (s === 0 && window.__ended !== i) { window.__ended = i; Android.ended(i < 0 ? 0 : i, pl ? pl.length : 0); }
+      if (s !== 0) window.__ended = -1;
+    } catch(x){}
+  }, 1000);
+})();
+"""

@@ -6,6 +6,11 @@ P=com.imad.planner
 adb install -r app/build/outputs/apk/release/app-release.apk
 adb shell pm grant $P android.permission.POST_NOTIFICATIONS || true
 adb root; sleep 3
+# Past the one-time password screen.
+adb shell am start -n $P/.MainActivity; sleep 5; adb shell am force-stop $P
+printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <boolean name="unlocked" value="true" />\n</map>\n' > /tmp/lock.xml
+adb push /tmp/lock.xml /data/data/$P/shared_prefs/lock.xml
+U=$(adb shell stat -c %u /data/data/$P | tr -d '\r'); adb shell chown $U:$U /data/data/$P/shared_prefs/lock.xml; adb shell chmod 660 /data/data/$P/shared_prefs/lock.xml
 adb shell settings put secure immersive_mode_confirmations confirmed
 shot() { sleep "${2:-4}"; adb exec-out screencap -p > "shots/$1.png"; }
 go() { adb shell am start -S -n $P/.MainActivity --es open "$1"; }
@@ -22,6 +27,9 @@ go ig; shot 07-ig-feed
 adb shell am start -S -n $P/.PlayerActivity --es series t0 --es title test --es list x --ez test true
 shot 00-webview-test 12
 adb shell input keyevent BACK
+# Instagram's login page on its own screen.
+adb shell am start -n $P/.IgLoginActivity; shot 16-ig-login 15
+adb shell input keyevent BACK; adb shell input keyevent BACK
 # A public playlist in the full-screen player.
 adb shell am start -n $P/.PlayerActivity --es series test --es title "تجربة" --es list PLlrxD0HtieHhS8VzuMCfQD4uJ9yne1mE6 --ei index 0 --ei pos 30
 shot 08-player 20
@@ -35,8 +43,9 @@ adb shell am start -S -n $P/.PlayerActivity --es series test2 --es title فيد�
 shot 14-player-embeddable 12
 adb shell dumpsys activity activities | grep -i "resumed" > shots/resumed.txt
 adb logcat -d -t 300 > shots/logcat-player.txt
-shot 14b-player-embeddable 6
+shot 14b-player-embeddable 8
 adb shell input tap 540 1200; shot 15-player-embeddable-controls 1
+sleep 6; shot 15b-player-controls-hidden 1
 adb shell input keyevent BACK
 # Half a swipe on a task row each way, to see the words under it.
 adb shell am start -S -n $P/.MainActivity; sleep 6

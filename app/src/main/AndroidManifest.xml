@@ -46,6 +46,8 @@
             android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
 
+        <activity android:name=".IgLoginActivity" android:exported="false" android:theme="@style/AppTheme" />
+
         <receiver android:name=".AlarmReceiver" android:exported="false" />
         <service android:name=".PlayerService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
         <receiver android:name=".ActionReceiver" android:exported="false" />
