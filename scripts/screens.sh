@@ -12,7 +12,7 @@ printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <bo
 adb push /tmp/lock.xml /data/data/$P/shared_prefs/lock.xml
 U=$(adb shell stat -c %u /data/data/$P | tr -d '\r'); adb shell chown $U:$U /data/data/$P/shared_prefs/lock.xml; adb shell chmod 660 /data/data/$P/shared_prefs/lock.xml
 adb shell settings put secure immersive_mode_confirmations confirmed
-shot() { sleep "${2:-4}"; adb exec-out screencap -p > "shots/$1.png"; }
+shot() { sleep "${2:-4}"; timeout 20 adb exec-out screencap -p > "shots/$1.png"; }
 go() { adb shell am start -S -n $P/.MainActivity --es open "$1"; }
 adb shell am start -n $P/.MainActivity; shot 01-today 8
 adb shell input keyevent BACK; sleep 1

@@ -148,8 +148,6 @@ class PlayerActivity : ComponentActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.domStorageEnabled = true
         setBackgroundColor(android.graphics.Color.BLACK)
-        // Drawn into its own GPU layer: the video frames go into the page's picture like everything else.
-        setLayerType(View.LAYER_TYPE_HARDWARE, null)
         webChromeClient = object : WebChromeClient() {
             // No grey "poster" box while a video loads.
             override fun getDefaultVideoPoster(): Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
