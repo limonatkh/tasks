@@ -137,8 +137,9 @@ fun SwipeRow(start: (() -> Unit)?, defer: (() -> Unit)?, deferMode: String, cont
     val state = rememberSwipeToDismissBoxState(
         confirmValueChange = { v ->
             when (v) {
-                SwipeToDismissBoxValue.StartToEnd -> start?.invoke()
-                SwipeToDismissBoxValue.EndToStart -> defer?.invoke()
+                // In RTL the box's values are mirrored: a swipe to the right ends as EndToStart.
+                SwipeToDismissBoxValue.EndToStart -> start?.invoke()
+                SwipeToDismissBoxValue.StartToEnd -> defer?.invoke()
                 else -> {}
             }
             false
@@ -150,13 +151,15 @@ fun SwipeRow(start: (() -> Unit)?, defer: (() -> Unit)?, deferMode: String, cont
     var shift by remember { mutableFloatStateOf(0f) }
     SwipeToDismissBox(
         state = state,
-        enableDismissFromStartToEnd = start != null,
-        enableDismissFromEndToStart = defer != null,
+        enableDismissFromEndToStart = start != null,
+        enableDismissFromStartToEnd = defer != null,
         backgroundContent = {
             val dir = state.dismissDirection
             Box(Modifier.fillMaxSize().onGloballyPositioned { baseX = it.positionInRoot().x }) {
                 if (dir == SwipeToDismissBoxValue.Settled || kotlin.math.abs(shift) < 2f) return@Box
-                val toStart = dir == SwipeToDismissBoxValue.StartToEnd
+                // The colour and word follow where the card really moved (right = start), never the box's own direction,
+                // which is not mirrored the same way as its values.
+                val toStart = shift > 0
                 if ((toStart && start == null) || (!toStart && defer == null)) return@Box
                 val color = if (toStart) Color(0xFF2E9E5B) else Color(0xFF3D7BF7)
                 Box(

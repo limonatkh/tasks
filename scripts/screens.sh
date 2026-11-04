@@ -26,6 +26,9 @@ go ig; shot 07-ig-feed
 # Does the WebView draw at all in the player screen (red page + a plain HTML5 video)?
 adb shell am start -S -n $P/.PlayerActivity --es series t0 --es title test --es list x --ez test true
 shot 00-webview-test 12
+adb shell input tap 540 1200; shot 00b-webview-test-controls 1
+adb emu rotate; shot 00c-webview-test-landscape 4
+adb emu rotate; adb emu rotate; adb emu rotate; sleep 2
 adb shell input keyevent BACK
 # Instagram's login page on its own screen.
 adb shell am start -n $P/.IgLoginActivity; shot 16-ig-login 15
@@ -49,7 +52,11 @@ sleep 6; shot 15b-player-controls-hidden 1
 adb shell input keyevent BACK
 # Half a swipe on a task row each way, to see the words under it.
 adb shell am start -S -n $P/.MainActivity; sleep 6
-(adb shell input swipe 250 1850 900 1850 4000 &) ; sleep 2.2; adb exec-out screencap -p > shots/12-swipe-right.png; sleep 4
-(adb shell input swipe 900 1850 250 1850 4000 &) ; sleep 2.2; adb exec-out screencap -p > shots/13-swipe-left.png; sleep 4
+# Half swipes (held mid-way) show the colour and word; full swipes show what really happened.
+(adb shell input swipe 250 1610 800 1610 4000 &) ; sleep 2.2; adb exec-out screencap -p > shots/12-half-right.png; sleep 4
+(adb shell input swipe 850 1610 300 1610 4000 &) ; sleep 2.2; adb exec-out screencap -p > shots/13-half-left.png; sleep 4
+adb shell input swipe 150 1610 1000 1610 250; shot 17-full-right-result 3
+adb shell am start -S -n $P/.MainActivity; sleep 6
+adb shell input swipe 1000 1850 100 1850 250; shot 18-full-left-result 2
 adb shell dumpsys webviewupdate | grep -i "current webview" > shots/webview.txt
 adb logcat -d -t 400 > shots/logcat.txt

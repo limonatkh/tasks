@@ -1,6 +1,11 @@
 package com.imad.planner
 
 import android.annotation.SuppressLint
+import androidx.compose.ui.platform.ComposeView
+import android.widget.FrameLayout
+import android.view.ViewGroup
+import android.view.View
+import android.graphics.Bitmap
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -52,7 +57,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -95,15 +99,25 @@ class PlayerActivity : ComponentActivity() {
         lifecycleScope.launch {
             if (link == null) link = Settings.from(repo.store.allMeta().associate { it.key to it.value }).ytLinks[series]
             val l = link ?: run { finish(); return@launch }
-            setContent {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                    PlayerScreen(title, l, makeWeb = { createWeb(it) }, js = { web?.evaluateJavascript(it, null) },
-                        save = { keep(it) }, ended = { i, total -> episodeEnded(i, total) }, close = { finish() })
+            // The page is a plain view straight in the window, and the buttons are drawn over it on a clear layer,
+            // so nothing of ours is painted under the video.
+            val root = FrameLayout(this@PlayerActivity).apply { setBackgroundColor(android.graphics.Color.BLACK) }
+            container = root
+            val controls = ComposeView(this@PlayerActivity).apply {
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                setContent {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                        PlayerScreen(title, l, makeWeb = { createWeb(it) }, js = { web?.evaluateJavascript(it, null) },
+                            save = { keep(it) }, ended = { i, total -> episodeEnded(i, total) }, close = { finish() })
+                    }
                 }
             }
+            root.addView(controls, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            setContentView(root)
         }
     }
 
+    private var container: FrameLayout? = null
     private var last: YtLink? = null
     private fun currentLink(): YtLink = last ?: link!!
 
@@ -134,9 +148,15 @@ class PlayerActivity : ComponentActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         settings.domStorageEnabled = true
         setBackgroundColor(android.graphics.Color.BLACK)
-        webChromeClient = WebChromeClient()
+        // Drawn into its own GPU layer: the video frames go into the page's picture like everything else.
+        setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webChromeClient = object : WebChromeClient() {
+            // No grey "poster" box while a video loads.
+            override fun getDefaultVideoPoster(): Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        }
+        container?.addView(this, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         addJavascriptInterface(bridge, "Android")
-        if (intent.getBooleanExtra("test", false)) { loadDataWithBaseURL("https://com.imad.planner", "<html><body style='margin:0;background:#c00;color:#fff;font-size:40px'>WEBVIEW OK</body></html>", "text/html", "utf-8", null); web = this; return@apply }
+        if (intent.getBooleanExtra("test", false)) { loadDataWithBaseURL("https://com.imad.planner", "<html><body style='margin:0;background:#000;color:#fff;font-size:28px'><div style='padding:12px'>اختبار الصورة</div><video id=v style='width:100%' autoplay loop playsinline controls src='https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'></video></body></html>", "text/html", "utf-8", null); web = this; return@apply }
         // YouTube's own embed page is the whole page (no frame inside our page), so its picture is drawn like any page.
         webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) { view.evaluateJavascript(hook(currentLink()), null) }
@@ -199,8 +219,8 @@ private fun PlayerScreen(title: String, start: YtLink, makeWeb: (Any) -> WebView
     }
     fun poke() { shown = true; touch++ }
     fun clock(s: Float) = (s.toInt()).let { "%d:%02d".format(it / 60, it % 60) }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { makeWeb(bridge) }, modifier = Modifier.fillMaxSize())
+    remember { makeWeb(bridge) }
+    Box(Modifier.fillMaxSize()) {
         // A layer over the video takes the taps (show or hide the controls), so they never reach YouTube's page.
         Box(Modifier.fillMaxSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { if (shown) shown = false else poke() })
         AnimatedVisibility(visible = shown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
@@ -270,7 +290,7 @@ private fun hook(l: YtLink) = """
   var T = ${l.index}, P = ${l.pos}, LIST = '${if (l.list.startsWith("v:")) "" else l.list}';
   var mobile = location.host.indexOf('m.youtube') >= 0;
   var st = document.createElement('style');
-  st.textContent = '.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-pause-overlay,.ytp-watermark,.ytp-ce-element,.ytp-endscreen-content,.ytp-show-cards-title,.ytp-paid-content-overlay{display:none!important}' +
+  st.textContent = '#movie_player > :not(.html5-video-container):not(.ytp-error){display:none!important}.ytp-chrome-top,.ytp-chrome-bottom,.ytp-gradient-top,.ytp-gradient-bottom,.ytp-pause-overlay,.ytp-watermark,.ytp-ce-element,.ytp-endscreen-content,.ytp-show-cards-title,.ytp-paid-content-overlay{display:none!important}' +
     (mobile ? 'html,body{background:#000!important;overflow:hidden!important}ytm-mobile-topbar-renderer,header,ytm-pivot-bar-renderer,ytm-item-section-renderer,ytm-single-column-watch-next-results-renderer,ytm-watch-metadata-app-promo-renderer,ytm-companion-slot,.mobile-topbar-header,.watch-below-the-player,ytm-engagement-panel{display:none!important}#player-container-id,#player-container,#player,.player-container,#movie_player,#movie_player video{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;z-index:99999!important;background:#000!important}video{object-fit:contain!important}' : '');
   (document.head || document.documentElement).appendChild(st);
   var reached = mobile || T <= 0, jumped = false, ended = -1;
