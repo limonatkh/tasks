@@ -27,9 +27,7 @@ adb emu rotate; adb emu rotate; adb emu rotate; sleep 2
 adb shell input keyevent BACK
 # Half a swipe on a task row each way, to see the words under it.
 adb shell am start -S -n $P/.MainActivity; sleep 6
-adb shell input motionevent DOWN 300 1512; for x in 380 460 540 620; do adb shell input motionevent MOVE $x 1512; done
-shot 12-swipe-right 1; adb shell input motionevent MOVE 300 1512; adb shell input motionevent UP 300 1512; sleep 2
-adb shell input motionevent DOWN 780 1512; for x in 700 620 540 460; do adb shell input motionevent MOVE $x 1512; done
-shot 13-swipe-left 1; adb shell input motionevent MOVE 780 1512; adb shell input motionevent UP 780 1512
+(adb shell input swipe 250 1512 900 1512 4000 &) ; sleep 2.2; adb exec-out screencap -p > shots/12-swipe-right.png; sleep 4
+(adb shell input swipe 900 1512 250 1512 4000 &) ; sleep 2.2; adb exec-out screencap -p > shots/13-swipe-left.png; sleep 4
+adb shell dumpsys webviewupdate | grep -i "current webview" > shots/webview.txt
 adb logcat -d -t 400 > shots/logcat.txt
-ls -la shots
