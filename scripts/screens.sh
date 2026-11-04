@@ -28,7 +28,10 @@ adb emu rotate; adb emu rotate; adb emu rotate; sleep 2
 adb shell input keyevent BACK
 # The IFrame API's own demo video, which allows embedding.
 adb shell am start -S -n $P/.PlayerActivity --es series test2 --es title "فيديو تجربة" --es list "v:M7lc1UVf-VE" --ei index 0 --ei pos 10
-shot 14-player-embeddable 25
+shot 14-player-embeddable 8
+adb shell dumpsys activity activities | grep -i "resumed" > shots/resumed.txt
+adb logcat -d -t 300 > shots/logcat-player.txt
+shot 14b-player-embeddable 6
 adb shell input tap 540 1200; shot 15-player-embeddable-controls 1
 adb shell input keyevent BACK
 # Half a swipe on a task row each way, to see the words under it.
