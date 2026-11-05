@@ -1435,7 +1435,7 @@ class Repository(private val context: Context) {
         for (p in people) {
             val a = answers[p.user]
             val list = a?.takeIf { it.code == 200 }?.let { Ig.parsePosts(p.user, it.body) }
-            if (list == null) { failed++; reasons += if (a == null) "ما وصل رد" else if (a.code == 200) "رد غير متوقع" else Ig.why(a.code) }
+            if (list == null) { failed++; reasons += if (a == null) "ما وصل رد" else if (a.body.contains("not-logged-in")) "لازم تسجّل دخول لإنستغرام من جديد" else if (a.code == 200) "رد غير متوقع" else Ig.why(a.code) }
             else got += list.filter { it.at >= p.addedAt }
         }
         var added = 0

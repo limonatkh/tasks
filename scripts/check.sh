@@ -13,13 +13,16 @@ A push /tmp/lock.xml /data/data/$P/shared_prefs/lock.xml
 U=$(A shell stat -c %u /data/data/$P | tr -d '\r'); A shell chown $U:$U /data/data/$P/shared_prefs/lock.xml
 A shell settings put secure immersive_mode_confirmations confirmed
 A shell settings put global auto_time 0
-shot() { sleep "${2:-4}"; A exec-out screencap -p > "shots/$1.png"; }
+shot() { sleep "${2:-4}"; nowait; A exec-out screencap -p > "shots/$1.png"; }
 go() { A shell am start -S -n $P/.MainActivity --es open "$1"; }
 spot() { A shell uiautomator dump /sdcard/u.xml >/dev/null; A pull /sdcard/u.xml /tmp/u.xml >/dev/null; python3 scripts/find.py /tmp/u.xml "$1"; }
-tap() { local xy; xy=$(spot "$1"); echo "tap $1 -> $xy"; [ -n "$xy" ] && A shell input tap $xy; }
+# The launcher's "isn't responding" box (slow emulator) is waved away before anything is tapped.
+nowait() { local w; w=$(spot "text:Wait"); [ -n "$w" ] && A shell input tap $w && sleep 1; }
+tap() { nowait; local xy; xy=$(spot "$1"); echo "tap $1 -> $xy"; [ -n "$xy" ] && A shell input tap $xy; }
 
 A shell date 110510002026.00; sleep 2
-A shell am start -n $P/.MainActivity; shot 01-today 8
+sleep 30; nowait
+A shell am start -n $P/.MainActivity; sleep 8; nowait; shot 01-today 1
 
 # 1. Closing today by mistake, then opening it again: the tasks come back.
 go tab:0; shot 01b-before-close 5
@@ -43,7 +46,7 @@ A shell date 110510002026.00; sleep 2
 
 # 3b. A yearly plan from zero.
 go yeargoal:p:quran-read; shot 13-year-sheet 5
-A shell input swipe 540 1800 540 500 300; sleep 1; A shell input swipe 540 1800 540 500 300
+nowait; for k in 1 2 3 4 5; do A shell input swipe 540 1900 540 700 300; sleep 1; done
 tap "text:خطّطه من جديد"; shot 14-reset-ask 2
 tap "text:ألغِ القديم"; shot 15-reset-editor 4
 
