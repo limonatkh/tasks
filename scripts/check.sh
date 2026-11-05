@@ -14,6 +14,9 @@ A push /tmp/lock.xml /data/data/$P/shared_prefs/lock.xml
 U=$(A shell stat -c %u /data/data/$P | tr -d '\r'); A shell chown $U:$U /data/data/$P/shared_prefs/lock.xml
 A shell settings put secure immersive_mode_confirmations confirmed
 A shell settings put global auto_time 0
+# The emulator's launcher keeps freezing ("isn't responding") and its box covers the app: it is switched off.
+A shell pm disable-user --user 0 com.google.android.apps.nexuslauncher || true
+A shell am force-stop com.google.android.apps.nexuslauncher || true
 shot() { sleep "${2:-4}"; nowait; A exec-out screencap -p > "shots/$1.png"; }
 go() { A shell am start -S -n $P/.MainActivity --es open "$1"; }
 spot() { A shell uiautomator dump /sdcard/u.xml >/dev/null; A pull /sdcard/u.xml /tmp/u.xml >/dev/null; python3 scripts/find.py /tmp/u.xml "$1"; }
