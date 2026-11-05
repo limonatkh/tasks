@@ -1644,7 +1644,9 @@ class Repository(private val context: Context) {
     private suspend fun autoCloseLocked() {
         val today = Clock.today()
         val s = settingsLocked()
-        val days = store.allTasks().filter { it.open && !it.running && it.day < today.toString() }.map { it.day }.distinct().sorted()
+        // After midnight and before the day starts, last night's day is still going: it is not closed by itself yet.
+        val cutoff = if (Clock.nowMinute() < s.dayStart) today.minusDays(1) else today
+        val days = store.allTasks().filter { it.open && !it.running && it.day < cutoff.toString() }.map { it.day }.distinct().sorted()
         for (d in days) if (store.meta("closed:$d") == null) closeDayLocked(LocalDate.parse(d), s.closeDefault)
     }
 

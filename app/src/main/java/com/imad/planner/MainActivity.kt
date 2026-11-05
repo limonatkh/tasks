@@ -403,11 +403,12 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             route == "closeday" -> { repo.closeDay("close"); snackbar.showSnackbar("انسكّر يوم ${repo.lastClosed}") }
             route == "reopen" -> { val n = repo.reopenDay(); snackbar.showSnackbar("انفتح اليوم من جديد، رجعت $n مهام") }
             route.startsWith("yeargoal:") -> route.removePrefix("yeargoal:").let { k ->
-                yearTarget = if (k.startsWith("g:")) snap.goals.firstOrNull { it.id == k.removePrefix("g:") }?.let { YearTarget(goal = it) }
-                else snap.plans.firstOrNull { it.id == k.removePrefix("p:") }?.let { YearTarget(plan = it) }
+                yearTarget = if (k.startsWith("g:")) repo.store.goal(k.removePrefix("g:"))?.let { YearTarget(goal = it) }
+                else Plans.parse(repo.store.meta("plans")).firstOrNull { it.id == k.removePrefix("p:") }?.let { YearTarget(plan = it) }
             }
             route == "igtest" -> IgWeb.fetchAll(context, listOf("instagram"))["instagram"].let { a ->
-                snackbar.showSnackbar(if (a == null) "ما وصل رد" else "رد إنستغرام ${a.code}: " + (if (a.code == 200 && Ig.parsePosts("instagram", a.body) != null) "البوستات وصلت ✓" else a.body.take(80)))
+                snackbar.showSnackbar(if (a == null) "ما وصل رد" else "رد إنستغرام ${a.code}: " + (if (a.code == 200 && Ig.parsePosts("instagram", a.body) != null) "البوستات وصلت ✓" else a.body.take(80)),
+                    duration = androidx.compose.material3.SnackbarDuration.Indefinite)
             }
             route == "day" -> {
                 val d = if (Clock.minuteOfDay(System.currentTimeMillis()) < snap.settings.dayStart) Clock.today() else Clock.today().plusDays(1)

@@ -552,7 +552,8 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
     // Tasks are kept together by group (in the order of the groups), so related ones sit next to each other.
     val groupOrder = s.settings.groups.mapIndexed { i, g -> g.key to i }.toMap()
     val byGroup = compareBy<Task>({ groupOrder[it.category] ?: 99 }, { it.title })
-    val pool = tasks.filter { it.open && it.period.isEmpty() && !isRoutine(it, rules, s.settings) }.sortedWith(byGroup)
+    // Everything without a period waits here, routine too (nothing is placed by itself while planning).
+    val pool = tasks.filter { it.open && it.period.isEmpty() }.sortedWith(byGroup)
     val bounds = remember { mutableStateMapOf<String, Rect>() }
     var dragging by remember { mutableStateOf<Task?>(null) }
     var dragPos by remember { mutableStateOf(Offset.Zero) }
