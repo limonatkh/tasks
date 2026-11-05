@@ -541,8 +541,9 @@ fun GoalChainSheet(s: Snapshot, series: String, close: () -> Unit, openWeek: () 
  */
 @Composable
 fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String, String) -> Unit, confirm: () -> Unit, details: (Task) -> Unit,
-                 routine: (Task, Boolean) -> Unit = { _, _ -> }) {
+                 routine: (Task, Boolean) -> Unit = { _, _ -> }, addSeries: (String) -> Unit = {}, newTask: () -> Unit = {}) {
     var askRoutine by remember { mutableStateOf<Task?>(null) }
+    var adding by remember { mutableStateOf(false) }
     val ds = day.toString()
     val tasks = s.tasks.filter { it.day == ds && it.state != "skipped" }
     val rules = s.ruleMap
@@ -750,6 +751,9 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Text("المهام · ${pool.size}", fontWeight = FontWeight.Bold)
+                            Text("+ إضافة", Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp))
+                                .clickable { adding = true }.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                             if (pool.isEmpty()) Muted("كل المهام انحطت ✓")
                             pool.groupBy { it.category }.forEach { (cat, list) ->
                                 val gi = s.settings.groups.indexOfFirst { it.key == cat }.coerceAtLeast(0)
@@ -783,6 +787,34 @@ fun DayPlanSheet(s: Snapshot, day: LocalDate, close: () -> Unit, assign: (String
                 }
             }
         }
+    }
+    if (adding) {
+        // What can go into this day: first what the week plan has for it, then every goal and recurring task.
+        val openSeries = tasks.filter { it.open }.map { seriesOf(it) }.toSet()
+        val all = planItemsAll(s).filter { !it.series.startsWith("g:") && s.rules.any { r -> r.id == it.series } }
+        val dayKey = Targets.dayKey(day); val weekKey = Targets.weekKey(Targets.weekStart(day))
+        val planned = (s.targets[dayKey]?.keys.orEmpty() + s.targets[weekKey]?.keys.orEmpty()).toSet()
+        val first = all.filter { it.series in planned }; val rest = all.filter { it.series !in planned }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { adding = false },
+            title = { Text("إضافة لهاليوم") },
+            text = {
+                Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                    Text("+ مهمة جديدة", Modifier.fillMaxWidth().clickable { adding = false; newTask() }.padding(vertical = 12.dp),
+                        style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    HorizontalDivider()
+                    @Composable fun line(c: PlanItem) {
+                        val there = c.series in openSeries
+                        Text(c.title + if (there) " · موجودة باليوم" else "", Modifier.fillMaxWidth().clickable { adding = false; addSeries(c.series) }.padding(vertical = 12.dp),
+                            style = MaterialTheme.typography.bodyLarge, color = if (there) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+                        HorizontalDivider()
+                    }
+                    if (first.isNotEmpty()) { Text("من خطة الأسبوع", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp)); first.forEach { line(it) } }
+                    if (rest.isNotEmpty()) { Text("كل الأهداف والمهام المتكررة", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp)); rest.forEach { line(it) } }
+                }
+            },
+            confirmButton = {}, dismissButton = { TextButton(onClick = { adding = false }) { Text("إغلاق") } },
+        )
     }
     askRoutine?.let { t ->
         val isR = isRoutine(t, rules, s.settings)

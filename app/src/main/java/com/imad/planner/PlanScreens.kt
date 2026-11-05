@@ -391,6 +391,7 @@ fun YearView(s: Snapshot, nav: Nav) {
                 Panel(Modifier.clickable { nav.openRule(r) }) {
                     Text(r.title, style = MaterialTheme.typography.titleMedium)
                     Muted(ruleSummary(r))
+                    ResetYearButton(r.title) { nav.resetYear("r:${r.id}") }
                 }
             }
         }
@@ -486,7 +487,22 @@ fun YearGoalSheet(y: YearTarget, s: Snapshot, nav: Nav, close: () -> Unit, accep
         val series = allSeries.firstOrNull()
         if (series != null) Secondary("تقرير الإنجاز", { nav.report(series, g?.name ?: p!!.title) }, Modifier.fillMaxWidth())
         Secondary("إعدادات الهدف", { close(); if (g != null) nav.openGoal(g) else nav.openPlan(p!!) }, Modifier.fillMaxWidth())
+        ResetYearButton(g?.name ?: p!!.title) { nav.resetYear(target.key) }
     }
+}
+
+/** Drops the old plan of a goal or task and starts building it again, after asking. */
+@Composable
+fun ResetYearButton(name: String, reset: () -> Unit) {
+    var ask by remember { mutableStateOf(false) }
+    TextButton(onClick = { ask = true }, modifier = Modifier.fillMaxWidth()) { Text("خطّطه من جديد (من الصفر)", color = MaterialTheme.colorScheme.error) }
+    if (ask) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { ask = false },
+        title = { Text("تخطيط «$name» من جديد؟") },
+        text = { Text("الخطة القديمة بتنلغى: أرقام الأشهر، أجزاء السنة، أهداف الأسابيع، والإنجاز بيرجع من البداية لسنة من اليوم. المهام اللي خلصتها وتقاريرها بتضل. بعدها بتفتحلك إعداداته تعبّيها.") },
+        confirmButton = { TextButton(onClick = { ask = false; reset() }) { Text("ألغِ القديم وابدأ", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton(onClick = { ask = false }) { Text("إلغاء") } },
+    )
 }
 
 @Composable

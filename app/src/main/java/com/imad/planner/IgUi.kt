@@ -124,6 +124,27 @@ object Ig {
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
+    /** Turns Instagram's answer for one account into posts (null when it is not the expected answer). */
+    fun parsePosts(user: String, body: String): List<IgPost>? = runCatching {
+        val o = JSONObject(body)
+        val edges = o.getJSONObject("data").getJSONObject("user").getJSONObject("edge_owner_to_timeline_media").getJSONArray("edges")
+        (0 until edges.length()).map { i ->
+            val n = edges.getJSONObject(i).getJSONObject("node")
+            val cap = n.optJSONObject("edge_media_to_caption")?.optJSONArray("edges")?.optJSONObject(0)?.optJSONObject("node")?.optString("text") ?: ""
+            IgPost(n.getString("id"), user, n.optString("shortcode"), n.optString("display_url"), if (n.optBoolean("is_video")) n.optString("video_url") else "",
+                n.optLong("taken_at_timestamp") * 1000, cap.take(300))
+        }
+    }.getOrNull()
+
+    /** What Instagram's answer code means, in words. */
+    fun why(code: Int): String = when (code) {
+        0 -> "ما في اتصال بإنستغرام"
+        401, 403 -> "إنستغرام بدّه تسجيل دخول من جديد ($code)"
+        404 -> "الحساب مش موجود أو الاسم غلط (404)"
+        429 -> "إنستغرام طالب تستنى شوي قبل التحميل (429)"
+        else -> "إنستغرام ردّ برقم $code"
+    }
+
     /** The latest posts of one account as Instagram's web page gets them. Null when Instagram refused. */
     fun fetch(user: String): List<IgPost>? {
         val cookie = cookies()
@@ -305,5 +326,57 @@ private fun IgVideo(p: IgPost, close: () -> Unit) {
                 }
             }, modifier = Modifier.fillMaxWidth())
         }
+    }
+}
+
+
+/**
+ * Loads the posts the way Instagram's own site does: from inside its page, with the sign-in of this phone's
+ * Instagram page (the cookie the login screen got). Nothing is shown; the page is never on screen.
+ */
+object IgWeb {
+    class Answer(val code: Int, val body: String)
+
+    @android.annotation.SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
+    suspend fun fetchAll(context: Context, users: List<String>): Map<String, Answer> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+        val out = mutableMapOf<String, Answer>()
+        val done = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val web = WebView(context)
+        val bridge = object {
+            @android.webkit.JavascriptInterface fun got(user: String, code: Int, body: String) {
+                synchronized(out) { out[user] = Answer(code, body); if (out.size >= users.size && !done.isCompleted) done.complete(Unit) }
+            }
+        }
+        web.settings.javaScriptEnabled = true
+        web.settings.domStorageEnabled = true
+        web.settings.userAgentString = Ig.UA
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
+        web.addJavascriptInterface(bridge, "IgApp")
+        var started = false
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String) {
+                if (started) return; started = true
+                val list = JSONArray(users).toString()
+                view.evaluateJavascript("""
+(async function(){
+  var users = $list;
+  for (var i = 0; i < users.length; i++) {
+    var u = users[i];
+    try {
+      var r = await fetch('/api/v1/users/web_profile_info/?username=' + encodeURIComponent(u), {credentials: 'include', headers: {'X-IG-App-ID': '${Ig.APP_ID}', 'X-Requested-With': 'XMLHttpRequest'}});
+      var t = await r.text();
+      IgApp.got(u, r.status, t);
+    } catch (e) { IgApp.got(u, 0, String(e)); }
+    await new Promise(function(ok){ setTimeout(ok, 1500); });
+  }
+})();
+""", null)
+            }
+        }
+        web.loadUrl("https://www.instagram.com/")
+        kotlinx.coroutines.withTimeoutOrNull(30_000L + users.size * 6_000L) { done.await() }
+        web.stopLoading(); web.destroy()
+        synchronized(out) { out.toMap() }
     }
 }

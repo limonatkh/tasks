@@ -194,6 +194,7 @@ interface Store {
     @Query("SELECT * FROM rules WHERE id = :id") suspend fun rule(id: String): Rule?
     @Query("SELECT * FROM goals WHERE id = :id") suspend fun goal(id: String): Goal?
     @Query("SELECT value FROM meta WHERE `key` = :key") suspend fun meta(key: String): String?
+    @Query("DELETE FROM meta WHERE `key` = :key") suspend fun deleteMeta(key: String)
     @Query("SELECT * FROM meta") suspend fun allMeta(): List<Meta>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun put(t: Task)
@@ -1199,6 +1200,20 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
+    /**
+     * Adds a goal's or a recurring task's session to a day by hand (from the day's planning). It lands in the list
+     * of tasks to place; nothing is placed by itself.
+     */
+    suspend fun addToDay(day: LocalDate, series: String) = locked {
+        val r = store.rule(series) ?: return@locked
+        val plans = plansLocked()
+        val plan = plans.firstOrNull { "plan-${it.id}" == series }
+        val made = buildInstances(r, day, plan, memLastOf(plans), plan?.let { monthTargetLocked(it, day) })
+            .ifEmpty { buildInstances(r, day, null, 0) }
+        store.putAll(made.map { it.copy(period = "", pinned = false, planned = 0) })
+        replanLocked()
+    }
+
     /** Puts a task in a period ("" = back to the list of tasks not placed yet). */
     suspend fun assignPeriod(id: String, key: String) = locked {
         val t = store.task(id) ?: return@locked
@@ -1414,13 +1429,14 @@ class Repository(private val context: Context) {
         val now = System.currentTimeMillis()
         if (!force && now - last < 4 * 3_600_000L) return "آخر تحميل الساعة ${fmt12(Clock.minuteOfDay(last))}"
         var failed = 0
+        val reasons = mutableListOf<String>()
         val got = mutableListOf<IgPost>()
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            for ((i, p) in people.withIndex()) {
-                if (i > 0) kotlinx.coroutines.delay(1500)
-                val list = Ig.fetch(p.user)
-                if (list == null) failed++ else got += list.filter { it.at >= p.addedAt }
-            }
+        val answers = runCatching { IgWeb.fetchAll(context, people.map { it.user }) }.getOrDefault(emptyMap())
+        for (p in people) {
+            val a = answers[p.user]
+            val list = a?.takeIf { it.code == 200 }?.let { Ig.parsePosts(p.user, it.body) }
+            if (list == null) { failed++; reasons += if (a == null) "ما وصل رد" else if (a.code == 200) "رد غير متوقع" else Ig.why(a.code) }
+            else got += list.filter { it.at >= p.addedAt }
         }
         var added = 0
         locked {
@@ -1432,9 +1448,9 @@ class Repository(private val context: Context) {
             store.put(Meta("igFetchedAt", now.toString()))
         }
         return when {
-            failed == people.size -> "إنستغرام ما ردّ. ممكن لازم تسجّل دخول من جديد."
-            added == 0 -> "ما في جديد" + if (failed > 0) " ($failed حساب ما ردّ)" else ""
-            else -> "وصل $added جديد" + if (failed > 0) " ($failed حساب ما ردّ)" else ""
+            failed == people.size -> "ما وصل إشي: " + reasons.distinct().joinToString("، ")
+            added == 0 -> "ما في جديد" + if (failed > 0) " ($failed حساب ما ردّ: ${reasons.distinct().joinToString("، ")})" else ""
+            else -> "وصل $added جديد" + if (failed > 0) " ($failed حساب ما ردّ: ${reasons.distinct().joinToString("، ")})" else ""
         }
     }
 
@@ -1520,6 +1536,41 @@ class Repository(private val context: Context) {
         store.put(t.copy(id = UUID.randomUUID().toString(), title = t.baseTitle + " · الباقي", minutes = rest, spent = 0, started = 0,
             state = "planned", ruleId = null, note = "ser:${seriesOf(t)}", period = period, planned = 0, pinned = false,
             preferMin = start?.let { maxOf(it + s.prayerAfter, Clock.minuteOfDay(now)) } ?: -1, created = now))
+        replanLocked()
+    }
+
+    // ---------- a yearly plan started again from zero ----------
+
+    /**
+     * The old plan is dropped: month targets, year parts and week/month targets go, and the goal starts again from
+     * today for a year — a record from its current value (0%), an amount plan from the beginning (not set up yet,
+     * so its settings ask again). Done tasks and the history stay as they were.
+     */
+    suspend fun resetYear(key: String) = locked {
+        val today = Clock.today()
+        val months = Months.parse(store.meta("months")).filterKeys { !it.startsWith("$key|") }
+        store.put(Meta("months", Months.encode(months)))
+        val parts = YearPart.parseAll(store.meta("yearParts")).toMutableMap(); parts.remove(key)
+        store.put(Meta("yearParts", YearPart.encodeAll(parts)))
+        val series = mutableSetOf<String>()
+        when {
+            key.startsWith("g:") -> store.goal(key.removePrefix("g:"))?.let { g ->
+                store.put(g.copy(baseline = g.current, startDay = today.toString(), targetDay = today.plusYears(1).toString()))
+                series += store.allRules().filter { g.id in Members.goals(it) }.map { it.id }
+                series += key
+            }
+            key.startsWith("p:") -> {
+                val id = key.removePrefix("p:")
+                savePlansLocked(plansLocked().map { p ->
+                    if (p.id != id) p else p.copy(done = 0, pointer = 1, startPage = 1, configured = false, dayKey = "", dayDone = 0, dayQuota = 0,
+                        endDay = today.plusYears(1).toString())
+                })
+                series += "plan-$id"
+            }
+            key.startsWith("r:") -> series += key.removePrefix("r:")
+        }
+        val all = targetsLocked().mapValues { (_, m) -> m.filterKeys { it !in series } }.filterValues { it.isNotEmpty() }
+        saveTargetsLocked(all)
         replanLocked()
     }
 
@@ -1713,7 +1764,8 @@ class Repository(private val context: Context) {
         val byHand = store.meta("dayPlanned:$ts") != null || store.meta("planning:$ts") != null
         val final = if (!s.prayerMode) updated else updated.map { t ->
             if (t.day != ts || t.period.isNotEmpty() || !t.open) return@map t
-            if (byHand && !isRoutine(t, rules, s) && !t.running && t.spent == 0L) return@map t
+            // While the day is arranged by hand, what the user left in the list stays there (routine too).
+            if (byHand && !t.running && t.spent == 0L) return@map t
             val place = s.placeOf(t)
             val key = when {
                 place != null && place.startsWith("p:") -> place.removePrefix("p:")
@@ -2050,8 +2102,51 @@ class Repository(private val context: Context) {
      * Ends a day. carry: unfinished tasks move to the next day (and their series shift after them).
      * close: the plan stays as it is; unfinished tasks are recorded as not done.
      */
-    suspend fun closeDay(mode: String, day: LocalDate = Clock.today()): Int = locked {
-        val n = closeDayLocked(day, mode)
+    /** The last day closed (shown after closing, to make sure it was the right one). */
+    @Volatile var lastClosed: LocalDate? = null
+
+    suspend fun closeDay(mode: String, day: LocalDate? = null): Int = locked {
+        val d = day ?: dayToCloseLocked()
+        lastClosed = d
+        val n = closeDayLocked(d, mode)
+        replanLocked()
+        n
+    }
+
+    /**
+     * The day the user means when closing: after midnight and before the day starts, it is still last night's day
+     * (unless that one is already closed), never the new date.
+     */
+    private suspend fun dayToCloseLocked(): LocalDate {
+        val s = settingsLocked()
+        val today = Clock.today()
+        val yesterday = today.minusDays(1)
+        return if (Clock.nowMinute() < s.dayStart && store.meta("closed:$yesterday") == null) yesterday else today
+    }
+
+    /**
+     * Undoes closing a day (closed by mistake): its tasks closed without being done are open again, and those
+     * carried to the next day come back, unless they were started there.
+     */
+    suspend fun reopenDay(day: LocalDate = Clock.today()): Int = locked {
+        val ds = day.toString()
+        val next = day.plusDays(1).toString()
+        store.deleteMeta("closed:$ds")
+        val evs = store.allEvents().filter { it.day == ds }
+        val closedIds = evs.filter { it.type == "missed" && (it.text.startsWith("أُغلق اليوم") || it.text.startsWith("انسكّرت")) }.mapNotNull { it.taskId }.toSet()
+        val carriedIds = evs.filter { it.type == "postpone" && it.text == "ترحيل لليوم التالي" }.mapNotNull { it.taskId }.toSet()
+        var n = 0
+        for (id in closedIds + carriedIds) {
+            val t = store.task(id) ?: continue
+            when {
+                id in closedIds && t.day == ds && t.state == "skipped" -> {
+                    store.put(t.copy(state = "planned", finishedAt = 0, note = if (t.note == "أُغلقت بدون إنجاز") "" else t.note)); n++
+                }
+                id in carriedIds && t.day == next && t.open && !t.running -> {
+                    store.put(t.copy(day = ds, planned = 0, period = "", preferMin = -1)); n++
+                }
+            }
+        }
         replanLocked()
         n
     }

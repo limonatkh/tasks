@@ -214,6 +214,8 @@ class Nav(
     val continueLater: (Task) -> Unit = {},
     val yearParts: (YearTarget) -> Unit = {},
     val ig: () -> Unit = {},
+    /** Drops a yearly plan and opens its settings to build it again ("g:…", "p:…" or "r:<rule>"). */
+    val resetYear: (String) -> Unit = {},
 )
 
 @Composable
@@ -397,6 +399,16 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             route == "watch" -> watchNew = true
             route == "ig" -> { tab = 3; igOpen = true }
             route == "goal" -> newGoal = true
+            // Used when checking the app on the emulator.
+            route == "closeday" -> { repo.closeDay("close"); snackbar.showSnackbar("انسكّر يوم ${repo.lastClosed}") }
+            route == "reopen" -> { val n = repo.reopenDay(); snackbar.showSnackbar("انفتح اليوم من جديد، رجعت $n مهام") }
+            route.startsWith("yeargoal:") -> route.removePrefix("yeargoal:").let { k ->
+                yearTarget = if (k.startsWith("g:")) snap.goals.firstOrNull { it.id == k.removePrefix("g:") }?.let { YearTarget(goal = it) }
+                else snap.plans.firstOrNull { it.id == k.removePrefix("p:") }?.let { YearTarget(plan = it) }
+            }
+            route == "igtest" -> IgWeb.fetchAll(context, listOf("instagram"))["instagram"].let { a ->
+                snackbar.showSnackbar(if (a == null) "ما وصل رد" else "رد إنستغرام ${a.code}: " + (if (a.code == 200 && Ig.parsePosts("instagram", a.body) != null) "البوستات وصلت ✓" else a.body.take(80)))
+            }
             route == "day" -> {
                 val d = if (Clock.minuteOfDay(System.currentTimeMillis()) < snap.settings.dayStart) Clock.today() else Clock.today().plusDays(1)
                 runCatching { repo.prepareDay(d) }; dayPlan = d
@@ -429,6 +441,16 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         sports = { sportsOpen = true },
         continueLater = { contFor = it },
         yearParts = { partsFor = it },
+        resetYear = { key -> act {
+            repo.resetYear(key)
+            yearTarget = null
+            when {
+                key.startsWith("g:") -> goalEditor = repo.store.goal(key.removePrefix("g:"))
+                key.startsWith("p:") -> planEditor = Plans.parse(repo.store.meta("plans")).firstOrNull { it.id == key.removePrefix("p:") }
+                key.startsWith("r:") -> ruleEditor = repo.store.rule(key.removePrefix("r:"))
+            }
+            snackbar.showSnackbar("انمسحت الخطة القديمة. عبّي إعداداتها من جديد.")
+        } },
         ig = { igOpen = true },
         syncQuran = { act { val st = repo.syncQuran(); if (st != QuranState.OK) snackbar.showSnackbar(st.text) } },
         look = { series, color, icon -> act { repo.setLook(series, color, icon) } },
@@ -471,7 +493,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
                 0 -> TodayTab(snap, repo, nav, add = { key -> creating = emptyTask(today).copy(period = key) }, askClose = { closeDay = true },
-                    closeDay = { mode -> act { val n = repo.closeDay(mode); snackbar.showSnackbar(if (mode == "carry") "ترحّلت $n مهام لبكرا" else "انسكّر اليوم") } },
+                    closeDay = { mode -> act { val n = repo.closeDay(mode); snackbar.showSnackbar((if (mode == "carry") "ترحّلت $n مهام لليوم اللي بعده" else "انسكّر اليوم") + if (repo.lastClosed != Clock.today()) " (يوم ${repo.lastClosed?.let { dayLabel(it) }})" else "") } },
                     goTomorrow = { tab = 1 })
                 1 -> TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) })
                 2 -> PlanTab(snap, nav)
@@ -602,7 +624,9 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         DayPlanSheet(snap, d, close = { dayPlan = null }, assign = { id, k -> act { repo.assignPeriod(id, k) } },
             routine = { t, on -> act { repo.setRoutine(seriesOf(t), on); if (on && t.period.isEmpty()) repo.assignPeriod(t.id, snap.settings.periodAt(d, snap.settings.dayStart)) } },
             confirm = { act { val n = repo.confirmDayPlan(d); snackbar.showSnackbar(if (n > 0) "انثبتت الخطة، وترحّلت $n مهام لليوم اللي بعده" else "انثبتت الخطة") } },
-            details = { detailsFor = it })
+            details = { detailsFor = it },
+            addSeries = { series -> act { repo.addToDay(d, series) } },
+            newTask = { creating = emptyTask(d) })
     }
     keepRestFor?.let { t -> KeepRestDialog(t, close = { keepRestFor = null }) { m -> act { repo.stopKeepRest(t.id, m); keepRestFor = null } } }
     if (groupsOpen) GroupsSheet(snap, close = { groupsOpen = false }, save = { list -> act { repo.saveGroups(list) } },
@@ -631,7 +655,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true }, openPrayers = { prayerOpen = true },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false) })
     if (closeDay) CloseDayDialog(snap.tasks.filter { it.day == today.toString() && it.state != "skipped" }, now, close = { closeDay = false },
-        finish = { mode -> act { val n = repo.closeDay(mode); closeDay = false; snackbar.showSnackbar(if (mode == "carry") "ترحّلت $n مهام لبكرا" else "انسكّر اليوم") } })
+        finish = { mode -> act { val n = repo.closeDay(mode); closeDay = false; snackbar.showSnackbar((if (mode == "carry") "ترحّلت $n مهام لليوم اللي بعده" else "انسكّر اليوم") + if (repo.lastClosed != Clock.today()) " (يوم ${repo.lastClosed?.let { dayLabel(it) }})" else "") } })
     restoreText?.let { text ->
         RestorePreview(text, close = { restoreText = null }) {
             act {
@@ -676,7 +700,7 @@ fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, ask
 }
 
 @Composable
-fun NightPanel(s: Snapshot, todays: List<Task>, beforeWake: Boolean, closeDay: (String) -> Unit, goTomorrow: () -> Unit) {
+fun NightPanel(s: Snapshot, todays: List<Task>, beforeWake: Boolean, closeDay: (String) -> Unit, goTomorrow: () -> Unit, reopen: () -> Unit = {}) {
     val left = todays.count { it.open }
     if (beforeWake) Panel {
         Text("وقت النوم", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
@@ -689,6 +713,10 @@ fun NightPanel(s: Snapshot, todays: List<Task>, beforeWake: Boolean, closeDay: (
                 Action("ترحيل لبكرا", { closeDay("carry") }, Modifier.weight(1f))
                 Secondary("إغلاق اليوم", { closeDay("close") }, Modifier.weight(1f))
             }
+        }
+        if (s.closedToday && Clock.nowMinute() < s.settings.dayEnd) {
+            Muted("انسكّر اليوم وهو لسا ما خلص؟")
+            Secondary("افتح اليوم من جديد", { reopen() }, Modifier.fillMaxWidth())
         }
         Secondary("خطة بكرا", goTomorrow, Modifier.fillMaxWidth())
     }
@@ -733,7 +761,7 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
         item {
             when {
                 active != null -> CurrentPanel(active, todays, s, repo, nav)
-                beforeWake || afterSleep -> NightPanel(s, todays, beforeWake, closeDay, goTomorrow)
+                beforeWake || afterSleep -> NightPanel(s, todays, beforeWake, closeDay, goTomorrow) { nav.act { repo.reopenDay() } }
                 else -> NextPanel(s, nav, todays, periods, nowKey, start) { picked = nowKey; scope.launch { listState.animateScrollToItem(2) } }
             }
         }
@@ -880,7 +908,7 @@ fun HoursToday(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit, askClos
         item {
             when {
                 current != null -> CurrentPanel(current, todays, s, repo, nav)
-                beforeWake || afterSleep -> NightPanel(s, todays, beforeWake, closeDay, goTomorrow)
+                beforeWake || afterSleep -> NightPanel(s, todays, beforeWake, closeDay, goTomorrow) { nav.act { repo.reopenDay() } }
                 else -> Panel {
                     Text("لا توجد مهمة الآن", style = MaterialTheme.typography.titleLarge)
                     Muted(if (todays.isEmpty()) "أضف مهمة والتطبيق يرتّب وقتها." else "خلصت مهام اليوم.")

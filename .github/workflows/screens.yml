@@ -2,6 +2,10 @@ name: Emulator screens
 
 on:
   workflow_dispatch:
+    inputs:
+      script:
+        description: "Script in scripts/ to run on the emulator"
+        default: "screens.sh"
 
 permissions:
   contents: write
@@ -31,7 +35,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: bash scripts/screens.sh
+          script: bash scripts/${{ inputs.script }}
       - name: Pack
         if: always()
         run: cd shots && zip -r ../screens.zip . || true
