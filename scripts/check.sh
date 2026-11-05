@@ -1,7 +1,8 @@
 #!/bin/bash
 # This round's checks: day planning, closing at night and opening again, a yearly plan from zero, Instagram's answer, swipes.
-set -x
 mkdir -p shots
+exec > >(tee shots/run.log) 2>&1
+set -x
 P=com.imad.planner
 A() { timeout 25 adb "$@"; }
 A install -r app/build/outputs/apk/release/app-release.apk
@@ -29,9 +30,12 @@ go tab:0; shot 01b-before-close 5
 go closeday; shot 02-today-closed 4
 go tab:0; shot 03-ended-card 4
 tap "text:افتح اليوم من جديد"; shot 04-reopened 4
+go reopen; shot 04b-reopened-by-route 4
+cp /tmp/u.xml shots/u-last.xml
 
 # 2. Day planning: add a task from the goals, put it in a period, take it out: it stays out.
 go day; shot 05-dayplan 6
+A shell uiautomator dump /sdcard/u.xml >/dev/null; A pull /sdcard/u.xml shots/u-dayplan.xml >/dev/null
 tap "text:+ إضافة"; shot 06-add-picker 2
 tap "text:بوكسنق"; shot 07-added-to-list 3
 tap "text:بوكسنق"; sleep 1; tap "text:العصر"; shot 08-put-in-asr 3
