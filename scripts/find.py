@@ -23,3 +23,10 @@ elif mode == "after:" or mode.startswith("after:"):
         if seen and t.strip():
             print(x, y); break
         if want in t: seen = True
+elif mode.startswith("desc:"):
+    # By accessibility label (Compose contentDescription), e.g. the done tick of a task.
+    want = mode[5:]
+    for m in re.finditer(r'<node [^>]*?content-desc="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+        d, a, b, c, e = m.group(1), *map(int, m.groups()[1:])
+        if want in d and 300 < (b + e) // 2 < 2250:
+            print((a + c) // 2, (b + e) // 2); break
