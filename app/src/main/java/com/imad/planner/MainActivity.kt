@@ -876,7 +876,6 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             val list = all.filter { keyOf(it) == p.key && (!HideRoutine.on || !isRoutine(it, rules, s.settings)) }
             val over = p.end <= minute
             val open = selected == p.key
-            if (p != periods.first()) item(key = "g-${p.key}") { Spacer(Modifier.height(6.dp)) }
             item(key = "h-${p.key}") {
                 PeriodTitle(p, list, over, nowKey == p.key, open, loads[p.key],
                     click = { picked = if (open) "" else p.key },
@@ -938,7 +937,7 @@ fun NextPanel(s: Snapshot, nav: Nav, todays: List<Task>, periods: List<Period>, 
                 DomainTile(domainOf(next, s.settings), 64.dp, s.settings.icons[seriesOf(next)]?.takeIf { s.settings.nameStyle != "name" })
                 Column(Modifier.weight(1f)) {
                     Text("هلأ · ${period?.name ?: ""}", fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                        color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurfaceVariant else Brand.lanternText)
+                        color = warmText())
                     Text(next.title, fontFamily = DisplayFont, fontSize = 23.sp, lineHeight = 30.sp, fontWeight = FontWeight.Bold)
                     Muted(durLabel(next.minutes) + if (here.size > 1) " · وباقي ${here.size - 1} بهاي الفترة" else "")
                 }
@@ -1066,7 +1065,7 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
             Text(
                 when { t.running -> "شغّالة هلأ"; upcoming -> "التالية"; t.spent > 0 -> "متوقفة مؤقتاً"; else -> "هلأ" },
                 Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
-                color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurfaceVariant else Brand.lanternText,
+                color = warmText(),
             )
             AppleButton(s, nav.pomo)
         }
@@ -1228,7 +1227,7 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snaps
             }
             DomainTile(domain, 44.dp, look?.takeIf { style != "name" }, done = finished)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                if (t.running) Text("▶ شغّالة هلأ", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurface else Brand.lanternText)
+                if (t.running) Text("▶ شغّالة هلأ", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = warmText())
                 else if (t.open && t.spent > 0) Text("⏸ متوقفة", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (showName) Text(t.title, fontSize = 16.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 23.sp,
                     color = if (finished) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
@@ -1298,7 +1297,7 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
         for ((p, list) in groups) {
         if (prayer && (p != null || list.isNotEmpty())) item(key = "tp-" + (p?.key ?: "none")) {
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(p?.name ?: "لسا ما توزّعت", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (p == null) Status.missed else MaterialTheme.colorScheme.primary)
+                Text(p?.name ?: "لسا ما توزّعت", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (p == null) warmText() else MaterialTheme.colorScheme.primary)
                 if (p != null) Text(fmt12(p.start), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Box(Modifier.weight(1f))
                 Text("${list.size} · ${durLabel(list.sumOf { it.task.minutes })}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

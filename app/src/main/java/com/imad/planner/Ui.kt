@@ -173,6 +173,14 @@ fun ctaColor(): Color = if (LocalThemeChoice.current.mono) MaterialTheme.colorSc
 @Composable
 fun onCtaColor(): Color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onPrimary else Brand.ink
 
+/** Warm orange words ("هلأ", "شغّالة"): darker on light, lighter on the night colours so they stay readable. */
+@Composable
+fun warmText(): Color = when {
+    LocalThemeChoice.current.mono -> MaterialTheme.colorScheme.onSurfaceVariant
+    isSystemInDarkTheme() -> Color(0xFFFFB27A)
+    else -> Brand.lanternText
+}
+
 /** Done is always this green, nothing else uses it. */
 @Composable
 fun doneColor(): Color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurface
