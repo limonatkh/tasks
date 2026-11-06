@@ -100,7 +100,7 @@ fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps, yt: YtLink? = null) {
             ops.finish?.let { Secondary("أنجزتها ✓", go(it), Modifier.weight(1f)) }
         }
         if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Secondary(if (moving) "نقل ▲" else "نقل… (فترة، بكرا، يوم)", { moving = !moving }, Modifier.weight(1f))
+            Secondary(if (moving) "نقل ▲" else "نقل…", { moving = !moving }, Modifier.weight(1f))
             ops.focus?.takeIf { !t.running && yt == null }?.let { Secondary("جلسة تركيز", go(it), Modifier.weight(1f)) }
         }
         if (moving || !t.open) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
