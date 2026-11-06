@@ -23,11 +23,13 @@ unlock() {
 
 # 1. Upgrade: 0.25 first, with its data, then 0.26 over it.
 if [ -s old.apk ]; then
-  A install old.apk; A shell am start -n $P/.MainActivity; sleep 10; unlock
+  A install old.apk; A shell pm grant $P android.permission.POST_NOTIFICATIONS; A shell am start -n $P/.MainActivity; sleep 10; unlock
   A shell am start -n $P/.MainActivity; shot 01-old-0.25 8
   A shell am force-stop $P
 fi
 A install -r app/build/outputs/apk/release/app-release.apk
+A shell pm grant $P android.permission.POST_NOTIFICATIONS
+[ -s old.apk ] || unlock
 A logcat -c
 A shell am start -n $P/.MainActivity; shot 02-after-upgrade 10
 A logcat -d | grep -E "FATAL|AndroidRuntime|IllegalState|Migration" > shots/upgrade-errors.txt || true

@@ -96,7 +96,7 @@ fun RepeatPicker(everyHours: String, weekdays: Int, setHours: (String) -> Unit, 
             FilterChip(selected = !realHours, onClick = { setReal(false) }, label = { Text("بالأيام: كل ${(h + 23) / 24} يوم") })
             FilterChip(selected = realHours, onClick = { setReal(true) }, label = { Text("$h ساعة فعلية") })
         }
-        Muted(if (realHours) "بتطلع بس لما يمرق $h ساعة من آخر ما خلّصت الجلسة، حتى لو صار هاد بنص اليوم." else "بالتاريخ: يوم آه ويوم لأ وهيك، بغض النظر عن الساعة.")
+        Muted(if (realHours) "بتطلع بس لما يمرق $h ساعة من آخر ما خلّصت الجلسة، حتى لو صار هاد بنص اليوم." else "بالتاريخ: كل ${(h + 23) / 24} يوم، بغض النظر عن الساعة اللي خلّصت فيها.")
     }
     Text("أو أيام محددة", style = MaterialTheme.typography.labelLarge)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
