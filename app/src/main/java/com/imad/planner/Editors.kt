@@ -720,7 +720,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
             FilterChip(selected = !theme.mono, onClick = { theme.set(false) }, label = { Text("ملوّن") })
             FilterChip(selected = theme.mono, onClick = { theme.set(true) }, label = { Text("أبيض وأسود") })
         }
-        Muted("الإصدار 0.28")
+        Muted("الإصدار 0.29")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

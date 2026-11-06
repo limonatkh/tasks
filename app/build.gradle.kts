@@ -13,8 +13,8 @@ android {
         applicationId = "com.imad.planner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 29
-        versionName = "0.28"
+        versionCode = 30
+        versionName = "0.29"
     }
 
     signingConfigs {

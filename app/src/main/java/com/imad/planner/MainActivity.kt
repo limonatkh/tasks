@@ -19,6 +19,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.background
@@ -44,6 +45,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Switch
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.material3.SnackbarResult
@@ -698,14 +700,34 @@ object Status {
     val missed = Color(0xFFD0574E)
 }
 
-/** done (green), missed (red: its period is over), running (accent) or nothing. */
+/** done (green), running (accent), closed without doing (a quiet grey) or nothing. No red on the day's page. */
 @Composable
 fun statusColor(t: Task, periodOver: Boolean): Color? = when {
     t.done -> Status.done
-    t.state == "skipped" -> Status.missed
+    t.state == "skipped" -> MaterialTheme.colorScheme.outline
     t.running -> MaterialTheme.colorScheme.primary
-    periodOver && t.open -> Status.missed
     else -> null
+}
+
+/** One colour per prayer period, so each part of the day reads as its own block while scrolling. */
+@Composable
+fun periodAccent(key: String): Color {
+    if (LocalThemeChoice.current.mono) return when (key) { "fajr", "asr", "isha" -> Color(0xFF8A8A8A); else -> Color(0xFF4A4A4A) }
+    return when (key) {
+        "fajr" -> Color(0xFF5B6BC0)
+        "dhuhr" -> Color(0xFFE0A030)
+        "asr" -> Color(0xFFDB7A3C)
+        "maghrib" -> Color(0xFFC0587A)
+        "isha" -> Color(0xFF4F6D7A)
+        else -> MaterialTheme.colorScheme.outline
+    }
+}
+
+/** How the day's tasks are shown: by prayer periods, or all in one plain list. Kept on the phone. */
+object TodayView {
+    var all by mutableStateOf(false)
+    fun load(context: android.content.Context) { all = context.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).getBoolean("allList", false) }
+    fun set(context: android.content.Context, v: Boolean) { all = v; context.getSharedPreferences("ui", android.content.Context.MODE_PRIVATE).edit().putBoolean("allList", v).apply() }
 }
 
 @Composable
@@ -780,7 +802,6 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
                 else -> NextPanel(s, nav, todays, periods, nowKey, start) { picked = nowKey; scope.launch { listState.animateScrollToItem(2) } }
             }
         }
-        if (!beforeWake && !afterSleep) item { CapacityLine(s, todays, loads.values.toList(), minute) { nav.dayPlan(s.today) } }
         // The prayer sheet is about to run out: said a few days before, not after.
         s.settings.prayersUntil?.let { until ->
             val left = java.time.temporal.ChronoUnit.DAYS.between(s.today, until)
@@ -791,11 +812,28 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             }
         }
         item { UndoRow(s, nav) }
-        item { HideRoutineRow() }
-        for (p in periods) {
+        item { ViewSwitch() }
+        if (TodayView.all) {
+            // Everything of today in one list, no times and no periods.
+            val shown = todays.filter { !HideRoutine.on || !isRoutine(it, rules, s.settings) }
+            val openOnes = shown.filter { it.open }
+            val doneOnes = shown.filter { !it.open }
+            if (openOnes.isEmpty()) item { Muted("ما ضل مهام مفتوحة اليوم ✓") }
+            items(openOnes, key = { "a-" + it.id }) { t ->
+                SwipeRow(start = if (!t.running) ({ start(t) }) else null, defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction) {
+                    TaskRow(t, todays, s.now, s = s, status = statusColor(t, false), hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
+                }
+            }
+            if (doneOnes.isNotEmpty()) {
+                item { Text("خلصانة · ${doneOnes.size}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) }
+                items(doneOnes, key = { "ad-" + it.id }) { t -> TaskRow(t, todays, s.now, s = s, status = statusColor(t, false), hideTime = true, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) } }
+            }
+        }
+        if (!TodayView.all) for (p in periods) {
             val list = all.filter { keyOf(it) == p.key && (!HideRoutine.on || !isRoutine(it, rules, s.settings)) }
             val over = p.end <= minute
             val open = selected == p.key
+            if (p != periods.first()) item(key = "g-${p.key}") { Spacer(Modifier.height(6.dp)) }
             item(key = "h-${p.key}") {
                 PeriodTitle(p, list, over, nowKey == p.key, open, loads[p.key],
                     click = { picked = if (open) "" else p.key },
@@ -806,17 +844,20 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
                 if (list.isEmpty()) item(key = "e-${p.key}") { Muted("   ما في مهام بهاي الفترة. لتضيف: زر + على اسمها.") }
                 items(list, key = { "t-" + it.id }) { t ->
                     val color = statusColor(t, over)
-                    if (t.open) SwipeRow(
-                        start = if (!t.running) ({ start(t) }) else null,
-                        defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction,
-                    ) { TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) } }
-                    else TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
+                    // The period's colour runs down beside its tasks, so it is clear where one part of the day ends.
+                    PeriodLane(periodAccent(p.key)) {
+                        if (t.open) SwipeRow(
+                            start = if (!t.running) ({ start(t) }) else null,
+                            defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction,
+                        ) { TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) } }
+                        else TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
+                    }
                 }
             }
         }
-        val loose = todays.filter { it.open && it.period.isEmpty() }
+        val loose = if (TodayView.all) emptyList() else todays.filter { it.open && it.period.isEmpty() }
         if (loose.isNotEmpty()) {
-            item { Text("ما وسعها اليوم · ${loose.size}", style = MaterialTheme.typography.titleMedium, color = Status.missed) }
+            item { Text("ما إلها فترة لسا · ${loose.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) }
             items(loose, key = { "t-" + it.id }) { t ->
                 SwipeRow(start = { start(t) }, defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction) {
                     TaskRow(t, todays, s.now, extra = whyNoRoom(t, loads.values.toList(), minute, s.now), s = s, hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
@@ -886,36 +927,25 @@ fun NextPanel(s: Snapshot, nav: Nav, todays: List<Task>, periods: List<Period>, 
 fun PeriodTitle(p: Period, list: List<Task>, over: Boolean, now: Boolean, open: Boolean, load: PeriodLoad?, click: () -> Unit, longClick: () -> Unit,
                 add: (() -> Unit)? = null) {
     val done = list.count { it.done }
-    val missed = list.count { it.state == "skipped" || (over && it.open) }
+    val accent = periodAccent(p.key)
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(onClick = click, onLongClick = longClick),
-        colors = CardDefaults.cardColors(containerColor = when {
-            open -> MaterialTheme.colorScheme.primaryContainer
-            now -> MaterialTheme.colorScheme.surfaceContainerHighest
-            else -> MaterialTheme.colorScheme.surfaceContainerHigh
-        }),
+        colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = if (now) 0.26f else if (over) 0.08f else 0.15f).compositeOver(MaterialTheme.colorScheme.surface)),
     ) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(p.name, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(7.dp).fillMaxHeight().background(accent))
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp).weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(p.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (over) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
             Text(fmt12(p.start), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (now) Text("الآن", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             Box(Modifier.weight(1f))
-            if (list.isNotEmpty()) Text(
-                buildString {
-                    append("$done/${list.size}")
-                    if (missed > 0) append(" · $missed ما انعملت")
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (missed > 0) Status.missed else if (done == list.size) Status.done else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (list.isNotEmpty()) Text("$done/${list.size}", style = MaterialTheme.typography.bodyMedium,
+                color = if (done == list.size) Status.done else MaterialTheme.colorScheme.onSurfaceVariant)
             if (add != null) Text("+", Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = add).padding(horizontal = 12.dp, vertical = 2.dp),
                 fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             Text(if (open) "▲" else "▼", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (!over && load != null && load.balance < 0) Text(
-            "الفترة ناقصها ${durLabel(-load.balance)}: انقل مهمة لفترة ثانية",
-            Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp), style = MaterialTheme.typography.bodyMedium, color = Status.missed,
-        )
+        }
     }
 }
 
@@ -1394,5 +1424,29 @@ fun estimateHints(s: Snapshot): List<EstimateHint> {
         val last = done[r.id].orEmpty().sortedByDescending { it.finishedAt }.take(8)
         val m = Estimates.suggest(r.minutes, last.map { ((it.spent + 30_000) / 60_000).toInt() }) ?: return@mapNotNull null
         if (skip.optInt(r.id, -1) == m) null else EstimateHint(r, m, last.size)
+    }
+}
+
+
+/** "بالمواقيت" or "كل المهام", one tap; routine can still be hidden. */
+@Composable
+fun ViewSwitch() {
+    val context = LocalContext.current
+    LaunchedEffect(Unit) { TodayView.load(context) }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(selected = !TodayView.all, onClick = { TodayView.set(context, false) }, label = { Text("بالمواقيت", fontSize = 15.sp) })
+        FilterChip(selected = TodayView.all, onClick = { TodayView.set(context, true) }, label = { Text("كل المهام", fontSize = 15.sp) })
+        Box(Modifier.weight(1f))
+        Text("بدون روتين", style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = HideRoutine.on, onCheckedChange = { HideRoutine.on = it })
+    }
+}
+
+/** A task inside a period: a thin line of the period's colour beside it. */
+@Composable
+fun PeriodLane(accent: Color, content: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Min)) {
+        Box(Modifier.padding(start = 3.dp).width(3.dp).fillMaxHeight().background(accent.copy(alpha = 0.55f), RoundedCornerShape(2.dp)))
+        Box(Modifier.padding(start = 9.dp).weight(1f)) { content() }
     }
 }
