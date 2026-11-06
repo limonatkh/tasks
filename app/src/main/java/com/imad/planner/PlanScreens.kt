@@ -113,6 +113,46 @@ fun habitsIn(cat: String, s: Snapshot): List<Rule> =
 
 // ---------------- Plan tab ----------------
 
+/** Deciding the coming days: tomorrow, the week, the month. */
+@Composable
+fun PlanningTab(s: Snapshot, nav: Nav, tomorrow: @Composable () -> Unit) {
+    var mode by rememberSaveable { mutableIntStateOf(0) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("بكرا", "الأسبوع", "الشهر").forEachIndexed { i, label ->
+                FilterChip(selected = mode == i, onClick = { mode = i }, label = { Text(label, fontSize = 16.sp) })
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (mode) {
+                0 -> Secondary("رتّب بكرا بالسحب", { nav.dayPlan(s.today.plusDays(1)) }, Modifier.weight(1f))
+                1 -> Secondary("خطة الأسبوع", nav.weekPlan, Modifier.weight(1f))
+                else -> Secondary("تخطيط الشهر", nav.monthPlan, Modifier.weight(1f))
+            }
+        }
+        Box(Modifier.weight(1f)) {
+            when (mode) {
+                0 -> tomorrow()
+                1 -> WeekView(s, nav)
+                else -> MonthView(s, nav)
+            }
+        }
+    }
+}
+
+/** Where each goal is going: the year plan, sport numbers, new goals. */
+@Composable
+fun GoalsTab(s: Snapshot, nav: Nav) {
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Action("+ هدف", nav.newGoal, Modifier.weight(1f))
+            Secondary("الرياضة", nav.sports, Modifier.weight(1f))
+            Secondary("المجموعات", nav.groups, Modifier.weight(1f))
+        }
+        Box(Modifier.weight(1f)) { YearView(s, nav) }
+    }
+}
+
 @Composable
 fun PlanTab(s: Snapshot, nav: Nav) {
     var mode by rememberSaveable { mutableIntStateOf(0) }

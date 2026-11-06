@@ -42,7 +42,14 @@ fun PrayerSheet(s: Settings, today: LocalDate, close: () -> Unit, set: (String, 
     var before by remember { mutableStateOf(s.prayerBefore.toString()) }
     var after by remember { mutableStateOf(s.prayerAfter.toString()) }
     var nap by remember { mutableStateOf(s.fajrNap.toString()) }
-    val parsed = remember(code) { Prayer.parse(code.map { if (Character.isDigit(it)) ('0' + Character.getNumericValue(it)) else it }.joinToString("")) }
+    val clean = remember(code) { code.map { if (Character.isDigit(it)) ('0' + Character.getNumericValue(it)) else it }.joinToString("") }
+    val check = remember(clean) { Prayer.check(clean) }
+    val parsed = check.days
+    val oldDays = remember(s.prayers) { Prayer.parse(s.prayers) }
+    // A sheet can come from a file (text or CSV, one line per day).
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) runCatching { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()?.let { code = it }
+    }
     Sheet("مواقيت الصلاة", close) {
         Panel {
             Text("مواقيت اليوم", style = MaterialTheme.typography.titleMedium)
@@ -59,13 +66,35 @@ fun PrayerSheet(s: Settings, today: LocalDate, close: () -> Unit, set: (String, 
         }
         Panel {
             Text("جدول الشهر الجديد", style = MaterialTheme.typography.titleMedium)
-            Muted("١) صوّر ورقة المواقيت. ٢) انسخ الرسالة وابعتها مع الصورة لشات جي بي تي. ٣) الصق اللي برجّعه هون واضغط حفظ.")
-            Action("نسخ الرسالة", { copyText(context, Prayer.CHATGPT_PROMPT); Toast.makeText(context, "انسخت الرسالة", Toast.LENGTH_SHORT).show() }, Modifier.fillMaxWidth())
+            s.prayersUntil?.let { until ->
+                val left = java.time.temporal.ChronoUnit.DAYS.between(today, until)
+                if (left <= 7) Text(if (left < 0) "الجدول خلص من ${-left} يوم: الأوقات هلأ تقريبية." else "الجدول بيخلص بعد $left أيام (${dayLabel(until)}).",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+            }
+            Muted("ثلاث طرق، اختار وحدة:")
+            Muted("١) بإيدك: اضغط «قالب الشهر الجاي»، بتطلع كل الأيام بأوقات تقريبية، صحّح الأرقام من الورقة.")
+            Secondary("قالب الشهر الجاي", {
+                val from = (s.prayersUntil?.plusDays(1) ?: today).let { if (it.isBefore(today)) today else it }
+                code = Prayer.template(from, 31, oldDays)
+            }, Modifier.fillMaxWidth())
+            Muted("٢) من ملف: نص أو CSV، سطر لكل يوم: التاريخ وبعده الأوقات.")
+            Secondary("استيراد ملف", { picker.launch(arrayOf("text/*", "application/csv", "application/octet-stream")) }, Modifier.fillMaxWidth())
+            Muted("٣) من صورة الورقة: انسخ الرسالة وابعتها مع الصورة لشات جي بي تي، والصق اللي برجّعه.")
+            Secondary("نسخ الرسالة", { copyText(context, Prayer.CHATGPT_PROMPT); Toast.makeText(context, "انسخت الرسالة", Toast.LENGTH_SHORT).show() }, Modifier.fillMaxWidth())
             OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text("الصق الكود هون") }, modifier = Modifier.fillMaxWidth(), minLines = 4, maxLines = 10)
-            if (code.isNotBlank()) Muted(
-                if (parsed.isEmpty()) "ما قدرت أقرأ ولا سطر. تأكد إن كل سطر: التاريخ وبعده الأوقات."
-                else "قرأت ${parsed.size} يوم: من ${dayLabel(parsed.first().date)} لـ ${dayLabel(parsed.last().date)}"
-            )
+            // Before saving: what was read, what repeats, what is missing, and what it replaces.
+            if (code.isNotBlank()) {
+                if (parsed.isEmpty()) Muted("ما قدرت أقرأ ولا سطر. تأكد إن كل سطر: التاريخ وبعده الأوقات.")
+                else {
+                    Muted("قرأت ${parsed.size} يوم: من ${dayLabel(parsed.first().date)} لـ ${dayLabel(parsed.last().date)}")
+                    if (check.repeated.isNotEmpty()) Text("مكرر: ${check.repeated.joinToString("، ") { "${it.dayOfMonth}/${it.monthValue}" }} (بنحفظ أول سطر بس)", color = MaterialTheme.colorScheme.error)
+                    if (check.missing.isNotEmpty()) Text("ناقص: ${check.missing.joinToString("، ") { "${it.dayOfMonth}/${it.monthValue}" }}", color = MaterialTheme.colorScheme.error)
+                    val replaced = parsed.count { p -> oldDays.any { it.date == p.date } }
+                    if (replaced > 0) Muted("بيبدّل $replaced يوم كانوا محفوظين.")
+                    val odd = parsed.filter { !(it.fajr < it.sunrise && it.sunrise < it.dhuhr && it.dhuhr < it.asr && it.asr < it.maghrib && it.maghrib < it.isha) }
+                    if (odd.isNotEmpty()) Text("أوقات مش بالترتيب بـ: ${odd.joinToString("، ") { "${it.date.dayOfMonth}/${it.date.monthValue}" }}. ممكن العصر أو المغرب لازمهم +12.", color = MaterialTheme.colorScheme.error)
+                }
+            }
             Action("حفظ الجدول", {
                 // Days already stored and not in the new code are kept, so nothing is lost when months overlap.
                 val old = Prayer.parse(s.prayers).filter { o -> parsed.none { it.date == o.date } }
@@ -202,6 +231,7 @@ fun periodLoads(s: Snapshot, todays: List<Task>): List<PeriodLoad> {
 @Composable
 fun PostponeChoice(t: Task, recurring: Boolean, close: () -> Unit, done: (String, String) -> Unit) {
     var text by remember { mutableStateOf("") }
+    var reason by remember { mutableStateOf("") }
     // One rule everywhere: the session moves to tomorrow and the series shifts with it, the same as closing the day.
     var mode by remember { mutableStateOf(if (recurring) "shift" else "move") }
     AlertDialog(
@@ -226,10 +256,17 @@ fun PostponeChoice(t: Task, recurring: Boolean, close: () -> Unit, done: (String
                         else -> "مواعيد السلسلة ما بتتغير، وهاي بتنسجل إنها ما انعملت."
                     })
                 }
-                OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("ملاحظة (اختياري): ليش أجّلتها؟") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                // A tap is enough for the reason; writing is optional.
+                Text("ليش؟ (اختياري)", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("الوقت ما كفّى", "صار إشي طارئ", "ناقصني إشي (نت، كهربا، جهاز)", "تغيّرت الأولوية", "تعبان").forEach { r ->
+                        FilterChip(selected = reason == r, onClick = { reason = if (reason == r) "" else r }, label = { Text(r) })
+                    }
+                }
+                OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("ملاحظة (اختياري)") }, modifier = Modifier.fillMaxWidth(), minLines = 1)
             }
         },
-        confirmButton = { TextButton(onClick = { done(text, mode) }) { Text(if (mode == "skip") "تخطّي" else "تأجيل") } },
+        confirmButton = { TextButton(onClick = { done(listOf(reason, text.trim()).filter { it.isNotBlank() }.joinToString(" · "), mode) }) { Text(if (mode == "skip") "تخطّي" else "تأجيل") } },
         dismissButton = { TextButton(onClick = close) { Text("إلغاء") } },
     )
 }

@@ -55,6 +55,22 @@ object Prayer {
         }
     }.distinctBy { it.date }.sortedBy { it.date }
 
+    /** Before saving a new sheet: which days it has twice, and which days are missing inside its range. */
+    class Check(val days: List<PrayerDay>, val repeated: List<LocalDate>, val missing: List<LocalDate>)
+
+    fun check(text: String): Check {
+        val dates = text.lines().mapNotNull { l -> l.trim().split(Regex("[\\s,;|]+")).firstOrNull()?.let { runCatching { LocalDate.parse(it) }.getOrNull() } }
+        val days = parse(text)
+        val repeated = dates.groupBy { it }.filter { it.value.size > 1 }.keys.sorted()
+        val missing = if (days.isEmpty()) emptyList() else
+            generateSequence(days.first().date) { it.plusDays(1) }.takeWhile { !it.isAfter(days.last().date) }.filter { d -> days.none { it.date == d } }.toList()
+        return Check(days, repeated, missing)
+    }
+
+    /** A month to fill in by hand: one line per day with the estimated times, to correct from the printed sheet. */
+    fun template(from: LocalDate, days: Int, table: List<PrayerDay>): String =
+        encode((0 until days).map { day(from.plusDays(it.toLong()), table).copy(source = "table") })
+
     fun encode(days: List<PrayerDay>): String = days.joinToString("\n") {
         listOf(it.date.toString(), t(it.fajr), t(it.sunrise), t(it.dhuhr), t(it.asr), t(it.maghrib), t(it.isha)).joinToString(" ")
     }

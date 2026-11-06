@@ -218,6 +218,7 @@ class Nav(
     val ig: () -> Unit = {},
     /** Drops a yearly plan and opens its settings to build it again ("g:…", "p:…" or "r:<rule>"). */
     val resetYear: (String) -> Unit = {},
+    val prayers: () -> Unit = {},
 )
 
 @Composable
@@ -406,6 +407,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             route == "menu" -> menuFor = repo.store.tasksOn(Clock.today().toString()).firstOrNull { it.open && it.ruleId != null }
             route == "postpone" -> postponeFor = repo.store.tasksOn(Clock.today().toString()).firstOrNull { it.open && it.ruleId != null }
             route == "askclose" -> closeDay = true
+            route == "prayers" -> prayerOpen = true
             route == "rule48" -> { repo.store.allRules().firstOrNull { it.weekdays == 0 && it.everyHours >= 48 }?.let { r -> ruleEditor = r } }
             route == "closeday" -> { repo.closeDay("close"); snackbar.showSnackbar("انسكّر يوم ${repo.lastClosed}") }
             route == "reopen" -> { val n = repo.reopenDay(); snackbar.showSnackbar("انفتح اليوم من جديد، رجعت $n مهام") }
@@ -449,6 +451,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         sports = { sportsOpen = true },
         continueLater = { contFor = it },
         yearParts = { partsFor = it },
+        prayers = { prayerOpen = true },
         resetYear = { key -> act {
             repo.resetYear(key)
             yearTarget = null
@@ -475,8 +478,8 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 title = {
                     Column {
-                        Text(listOf("مهام اليوم", "خطة بكرا", "الخطة", "التقارير")[tab], style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-                        Text(dayLabel(if (tab == 1) today.plusDays(1) else today), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(listOf("مهام اليوم", "التخطيط", "الأهداف", "التقارير")[tab], style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+                        Text(dayLabel(today), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 actions = {
@@ -495,7 +498,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             )
         },
         bottomBar = {
-            TextTabs(listOf("اليوم", "بكرا", "الخطة", "التقارير"), tab) { tab = it }
+            TextTabs(listOf("اليوم", "التخطيط", "الأهداف", "التقارير"), tab) { tab = it }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -503,9 +506,9 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
                 0 -> TodayTab(snap, repo, nav, add = { key -> creating = emptyTask(today).copy(period = key) }, askClose = { closeDay = true },
                     closeDay = { mode -> act { val n = repo.closeDay(mode); snackbar.showSnackbar((if (mode == "carry") "ترحّلت $n مهام لليوم اللي بعده" else "انسكّر اليوم") + if (repo.lastClosed != Clock.today()) " (يوم ${repo.lastClosed?.let { dayLabel(it) }})" else "") } },
                     goTomorrow = { tab = 1 })
-                1 -> TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) })
-                2 -> PlanTab(snap, nav)
-                else -> ReportsTab(snap, nav, backup = { exporter.launch("planner-backup-$today.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) })
+                1 -> PlanningTab(snap, nav) { TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) }) }
+                2 -> GoalsTab(snap, nav)
+                else -> ReportsTab(snap, nav, backup = { exporter.launch("planner-backup-$today.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }, repo = repo)
             }
         }
     }
@@ -778,6 +781,15 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             }
         }
         if (!beforeWake && !afterSleep) item { CapacityLine(s, todays, loads.values.toList(), minute) { nav.dayPlan(s.today) } }
+        // The prayer sheet is about to run out: said a few days before, not after.
+        s.settings.prayersUntil?.let { until ->
+            val left = java.time.temporal.ChronoUnit.DAYS.between(s.today, until)
+            if (left <= 3) item {
+                Text(if (left < 0) "جدول الصلاة خلص، الأوقات تقريبية. اضغط لتحط الجديد." else "جدول الصلاة بيخلص بعد $left أيام. اضغط لتحط الشهر الجاي.",
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = nav.prayers).padding(10.dp),
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
         item { UndoRow(s, nav) }
         item { HideRoutineRow() }
         for (p in periods) {
@@ -1237,13 +1249,27 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
 // ---------------- Reports ----------------
 
 @Composable
-fun ReportsTab(s: Snapshot, nav: Nav, backup: () -> Unit, restore: () -> Unit) {
+fun ReportsTab(s: Snapshot, nav: Nav, backup: () -> Unit, restore: () -> Unit, repo: Repository? = null) {
     val context = LocalContext.current
     val ts = s.today.toString()
     val todayList = s.tasks.filter { it.day == ts && it.state != "skipped" }
     val week = (0 until 7).map { s.today.minusDays(it.toLong()).toString() }.toSet()
     val weekTasks = s.tasks.filter { it.day in week }
+    val hints = remember(s.tasks, s.rules, s.meta["estSkip"]) { estimateHints(s) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (hints.isNotEmpty()) item {
+            Panel {
+                Text("اقتراحات للتقدير", style = MaterialTheme.typography.titleMedium)
+                Muted("من وقتك الحقيقي بآخر الجلسات. ما بيتغير إشي إلا إذا وافقت.")
+                hints.forEach { h ->
+                    Text("«${h.rule.title}»: آخر ${h.sessions} جلسات أخذت بالعادة ${durLabel(h.suggested)}، والتقدير ${durLabel(h.rule.minutes)}.", style = MaterialTheme.typography.bodyLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Action("خليها ${durLabel(h.suggested)}", { nav.act { repo?.setEstimate(h.rule.id, h.suggested) } }, Modifier.weight(1f))
+                        Secondary("لأ", { nav.act { repo?.skipEstimate(h.rule.id, h.suggested) } }, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
         item {
             Panel {
                 Text("اليوم", style = MaterialTheme.typography.titleMedium)
@@ -1354,5 +1380,19 @@ fun whyNoRoom(t: Task, loads: List<PeriodLoad>, minute: Int, now: Long): String 
         best == null -> "اليوم خلص. اسحبها لبكرا."
         best.balance >= need -> "في مكان بفترة ${best.period.name} (فاضي ${durLabel(best.balance)}): اضغط مطوّلاً وانقلها."
         else -> "بدها ${durLabel(need)}، وأكبر فراغ باقي ${durLabel(best.balance.coerceAtLeast(0))} (${best.period.name}). صغّرها أو أجّلها."
+    }
+}
+
+
+class EstimateHint(val rule: Rule, val suggested: Int, val sessions: Int)
+
+/** Recurring tasks whose real time keeps differing from their estimate (the latest 8 finished sessions). */
+fun estimateHints(s: Snapshot): List<EstimateHint> {
+    val skip = runCatching { org.json.JSONObject(s.meta["estSkip"] ?: "{}") }.getOrDefault(org.json.JSONObject())
+    val done = s.tasks.filter { it.done && it.spent > 0 && it.ruleId != null }.groupBy { it.ruleId!! }
+    return s.rules.filter { it.active && !it.id.startsWith("plan-") && it.sets <= 1 }.mapNotNull { r ->
+        val last = done[r.id].orEmpty().sortedByDescending { it.finishedAt }.take(8)
+        val m = Estimates.suggest(r.minutes, last.map { ((it.spent + 30_000) / 60_000).toInt() }) ?: return@mapNotNull null
+        if (skip.optInt(r.id, -1) == m) null else EstimateHint(r, m, last.size)
     }
 }

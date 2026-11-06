@@ -74,3 +74,23 @@ data class YearPart(val name: String, val months: Int, val value: Double = 0.0, 
         }
     }
 }
+
+/** Suggesting a better estimate from the real time of past sessions (the user decides; nothing changes by itself). */
+object Estimates {
+    const val MIN_SESSIONS = 5
+
+    /**
+     * [real] = real minutes of the latest sessions. Timers left running (more than 3x the estimate) and empty ones
+     * are left out. Null when there are too few sessions or the difference is small.
+     */
+    fun suggest(estimate: Int, real: List<Int>): Int? {
+        val ok = real.filter { it in 1..(estimate * 3).coerceAtLeast(10) }
+        if (ok.size < MIN_SESSIONS || estimate <= 0) return null
+        val sorted = ok.sorted()
+        val median = if (sorted.size % 2 == 1) sorted[sorted.size / 2] else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2
+        val diff = median - estimate
+        if (kotlin.math.abs(diff) < maxOf(5.0, estimate * 0.2)) return null
+        val rounded = ((median + 2) / 5 * 5).coerceAtLeast(5)
+        return rounded.takeIf { it != estimate }
+    }
+}

@@ -116,3 +116,23 @@ class ReviewTest {
         assertTrue(plan.placed["listen"]!!.start >= 15 * 60)
     }
 }
+
+class EstimatesTest {
+    @Test fun suggestsAfterFiveSessions() {
+        assertEquals(45, Estimates.suggest(30, listOf(44, 46, 45, 43, 47)))
+        assertEquals(null, Estimates.suggest(30, listOf(44, 46, 45, 43)))
+    }
+
+    @Test fun smallDifferencesAreLeftAlone() {
+        assertEquals(null, Estimates.suggest(30, listOf(32, 33, 31, 34, 30)))
+    }
+
+    @Test fun forgottenTimersDoNotCount() {
+        // Two sessions of 5 hours (timer left on) are dropped; four normal ones are not enough.
+        assertEquals(null, Estimates.suggest(30, listOf(300, 310, 31, 30, 29, 32)))
+    }
+
+    @Test fun shorterTooWhenItIsShorter() {
+        assertEquals(20, Estimates.suggest(40, listOf(20, 18, 22, 19, 21)))
+    }
+}

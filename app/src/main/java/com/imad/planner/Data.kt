@@ -1991,6 +1991,21 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
+    /** Takes a suggested estimate for a recurring task: the next sessions get it (done ones stay as they were). */
+    suspend fun setEstimate(ruleId: String, minutes: Int) = locked {
+        val r = store.rule(ruleId) ?: return@locked
+        store.put(r.copy(minutes = minutes.coerceIn(1, 600)))
+        store.allTasks().filter { it.ruleId == ruleId && it.open && !it.running && it.spent == 0L && it.day >= Clock.today().toString() }
+            .forEach { store.put(it.copy(minutes = minutes.coerceIn(1, 600))) }
+        replanLocked()
+    }
+
+    /** "No" to a suggestion: it is not shown again until the sessions suggest a different number. */
+    suspend fun skipEstimate(ruleId: String, minutes: Int) = locked {
+        val o = JSONObject(store.meta("estSkip")?.takeIf { it.isNotBlank() } ?: "{}")
+        store.put(Meta("estSkip", o.put(ruleId, minutes).toString()))
+    }
+
     /** Sets the real time worked by hand (a timer left running, or time worked without one). */
     suspend fun setSpent(id: String, minutes: Int) = locked {
         val t = store.task(id) ?: return@locked
