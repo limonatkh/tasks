@@ -136,3 +136,23 @@ class EstimatesTest {
         assertEquals(20, Estimates.suggest(40, listOf(20, 18, 22, 19, 21)))
     }
 }
+
+class PrayerSheetTest {
+    @Test fun templateIsAFullMonthTheParserReads() {
+        val from = java.time.LocalDate.of(2026, 12, 1)
+        val c = Prayer.check(Prayer.template(from, 31, emptyList()))
+        assertEquals(31, c.days.size)
+        assertEquals(emptyList<java.time.LocalDate>(), c.missing)
+        assertEquals(from, c.days.first().date)
+        assertTrue(c.days.all { it.fajr < it.sunrise && it.sunrise < it.dhuhr && it.dhuhr < it.asr && it.asr < it.maghrib && it.maghrib < it.isha })
+    }
+
+    @Test fun repeatedAndMissingDaysAreFound() {
+        val text = "2026-12-01 05:00 06:20 11:30 14:30 16:50 18:10\n" +
+            "2026-12-01 05:00 06:20 11:30 14:30 16:50 18:10\n" +
+            "2026-12-03 05:01 06:21 11:31 14:31 16:51 18:11"
+        val c = Prayer.check(text)
+        assertEquals(listOf(java.time.LocalDate.of(2026, 12, 1)), c.repeated)
+        assertEquals(listOf(java.time.LocalDate.of(2026, 12, 2)), c.missing)
+    }
+}
