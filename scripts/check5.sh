@@ -21,8 +21,8 @@ A push /tmp/lock.xml /data/data/$P/shared_prefs/lock.xml
 U=$(A shell stat -c %u /data/data/$P | tr -d '\r'); A shell chown $U:$U /data/data/$P/shared_prefs/lock.xml
 
 go prayers; shot 08-prayers 4
-A shell input swipe 540 1800 540 1200 600; sleep 3
-tap "text:قالب الشهر الجاي"; shot 10-template 3
+for k in 1 2 3 4 5 6 7 8; do xy=$(spot "text:قالب الشهر الجاي"); echo "try $k -> $xy"; if [ -n "$xy" ]; then A shell input tap $xy; break; fi; A shell input swipe 540 1600 540 1300 500; sleep 2; done
+shot 10-template 3
 A shell input swipe 540 1800 540 1300 600; sleep 2; shot 11-template-preview 1
 A shell input swipe 540 1800 540 1300 600; sleep 2; shot 12-template-preview-2 1
 A logcat -d -t 600 > shots/logcat.txt
