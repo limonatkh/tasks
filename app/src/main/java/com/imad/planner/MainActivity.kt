@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -654,6 +656,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             place = if (prayerDay) ({ placeFor = t }) else null,
             quran = { quranFor = t },
             report = { reportFor = seriesOf(t) to t.baseTitle },
+            focus = if (t.open) ({ act { repo.focus(t.id); pomoOpen = true } }) else null,
             fixTime = { fixFor = t },
             note = { noteFor = t },
             close = { act { repo.deferTask(t.id, "close") } },
@@ -774,6 +777,7 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
                 else -> NextPanel(s, nav, todays, periods, nowKey, start) { picked = nowKey; scope.launch { listState.animateScrollToItem(2) } }
             }
         }
+        if (!beforeWake && !afterSleep) item { CapacityLine(s, todays, loads.values.toList(), minute) { nav.dayPlan(s.today) } }
         item { UndoRow(s, nav) }
         item { HideRoutineRow() }
         for (p in periods) {
@@ -783,10 +787,11 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             item(key = "h-${p.key}") {
                 PeriodTitle(p, list, over, nowKey == p.key, open, loads[p.key],
                     click = { picked = if (open) "" else p.key },
-                    longClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); add(p.key) })
+                    longClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); add(p.key) },
+                    add = if (over) null else ({ add(p.key) }))
             }
             if (open) {
-                if (list.isEmpty()) item(key = "e-${p.key}") { Muted("   ما في مهام بهاي الفترة. اضغط مطوّلاً على اسمها لتضيف.") }
+                if (list.isEmpty()) item(key = "e-${p.key}") { Muted("   ما في مهام بهاي الفترة. لتضيف: زر + على اسمها.") }
                 items(list, key = { "t-" + it.id }) { t ->
                     val color = statusColor(t, over)
                     if (t.open) SwipeRow(
@@ -802,7 +807,7 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             item { Text("ما وسعها اليوم · ${loose.size}", style = MaterialTheme.typography.titleMedium, color = Status.missed) }
             items(loose, key = { "t-" + it.id }) { t ->
                 SwipeRow(start = { start(t) }, defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction) {
-                    TaskRow(t, todays, s.now, extra = "اضغط مطوّلاً وانقلها لفترة", s = s, hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
+                    TaskRow(t, todays, s.now, extra = whyNoRoom(t, loads.values.toList(), minute, s.now), s = s, hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
                 }
             }
         }
@@ -866,7 +871,8 @@ fun NextPanel(s: Snapshot, nav: Nav, todays: List<Task>, periods: List<Period>, 
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun PeriodTitle(p: Period, list: List<Task>, over: Boolean, now: Boolean, open: Boolean, load: PeriodLoad?, click: () -> Unit, longClick: () -> Unit) {
+fun PeriodTitle(p: Period, list: List<Task>, over: Boolean, now: Boolean, open: Boolean, load: PeriodLoad?, click: () -> Unit, longClick: () -> Unit,
+                add: (() -> Unit)? = null) {
     val done = list.count { it.done }
     val missed = list.count { it.state == "skipped" || (over && it.open) }
     Card(
@@ -890,6 +896,8 @@ fun PeriodTitle(p: Period, list: List<Task>, over: Boolean, now: Boolean, open: 
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (missed > 0) Status.missed else if (done == list.size) Status.done else MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (add != null) Text("+", Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = add).padding(horizontal = 12.dp, vertical = 2.dp),
+                fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             Text(if (open) "▲" else "▼", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (!over && load != null && load.balance < 0) Text(
@@ -1307,4 +1315,44 @@ fun FixTimeDialog(t: Task, spentMs: Long, close: () -> Unit, save: (Int) -> Unit
         confirmButton = { TextButton(onClick = { m?.let(save) }, enabled = m != null && m in 0..1440) { Text("حفظ") } },
         dismissButton = { TextButton(onClick = close) { Text("إلغاء") } },
     )
+}
+
+
+/**
+ * What is left of the day against what is still planned in it: free minutes of the periods still to come (prayers,
+ * work and the like taken out, each minute once) and the remaining time of open tasks (a task done alongside a
+ * training is not counted again).
+ */
+@Composable
+fun CapacityLine(s: Snapshot, todays: List<Task>, loads: List<PeriodLoad>, minute: Int, arrange: () -> Unit) {
+    val ahead = loads.filter { it.period.end > minute }
+    val free = ahead.sumOf { it.free }
+    val open = todays.filter { it.open && it.parallelTo == null && (it.period.isEmpty() || ahead.any { l -> l.period.key == it.period }) }
+    val need = open.sumOf { ((Maths.remaining(it, s.now) + 59_999) / 60_000).toInt() }
+    if (need == 0) return
+    val short = need - free
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(if (short > 0) Status.missed.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh)
+        .padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("باقي اليوم: متاح ${durLabel(free)} · المطلوب ${durLabel(need)}", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+        when {
+            short > 0 -> {
+                Text("ناقصك ${durLabel(short)}. اختار شو يتأجّل أو يصغر.", style = MaterialTheme.typography.bodyMedium, color = Status.missed)
+                Text("رتّب باقي اليوم", Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = arrange).padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
+            free - need < 15 -> Muted("مليان تقريباً: ما في مجال لأي تأخير.")
+            else -> Muted("بيضل فاضي ${durLabel(free - need)}.")
+        }
+    }
+}
+
+/** Why a task did not get a period today, in a few words. */
+fun whyNoRoom(t: Task, loads: List<PeriodLoad>, minute: Int, now: Long): String {
+    val need = ((Maths.remaining(t, now) + 59_999) / 60_000).toInt()
+    val best = loads.filter { it.period.end > minute }.maxByOrNull { it.balance }
+    return when {
+        best == null -> "اليوم خلص. اسحبها لبكرا."
+        best.balance >= need -> "في مكان بفترة ${best.period.name} (فاضي ${durLabel(best.balance)}): اضغط مطوّلاً وانقلها."
+        else -> "بدها ${durLabel(need)}، وأكبر فراغ باقي ${durLabel(best.balance.coerceAtLeast(0))} (${best.period.name}). صغّرها أو أجّلها."
+    }
 }

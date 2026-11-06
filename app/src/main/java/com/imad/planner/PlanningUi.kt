@@ -162,21 +162,22 @@ fun FinishAmountDialog(t: Task, target: Target, close: () -> Unit, done: (Int) -
 
 // ---------------- Pomodoro ----------------
 
-data class PomoState(val end: Long, val left: Long) {
+data class PomoState(val end: Long, val left: Long, val task: String = "") {
     fun remaining(now: Long) = if (end > 0) (end - now).coerceAtLeast(0) else left
     val running get() = end > 0
 }
 
 fun pomoState(s: Snapshot): PomoState {
     val o = runCatching { JSONObject(s.meta["pomo"] ?: "{}") }.getOrDefault(JSONObject())
-    return PomoState(o.optLong("end"), o.optLong("left", Repository.POMO_MS))
+    return PomoState(o.optLong("end"), o.optLong("left", Repository.POMO_MS), o.optString("task"))
 }
 
-data class PomoSession(val at: Long, val minutes: Int, val label: String)
+/** [task] set = a focus session of that task: its minutes are already in the task's time. */
+data class PomoSession(val at: Long, val minutes: Int, val label: String, val task: String = "")
 
 fun pomoSessions(s: Snapshot, day: LocalDate): List<PomoSession> = runCatching {
     val a = JSONArray(s.meta["pomo:$day"] ?: "[]")
-    (0 until a.length()).map { i -> a.getJSONObject(i).let { PomoSession(it.optLong("at"), it.optInt("min"), it.optString("label")) } }
+    (0 until a.length()).map { i -> a.getJSONObject(i).let { PomoSession(it.optLong("at"), it.optInt("min"), it.optString("label"), it.optString("task")) } }
 }.getOrDefault(emptyList())
 
 /** The small apple in the corner of the top card. */
@@ -196,7 +197,9 @@ fun PomodoroSheet(s: Snapshot, close: () -> Unit, act: (String) -> Unit) {
     val left = st.remaining(s.now)
     val today = pomoSessions(s, s.today)
     Sheet("🍎 بومودورو", close) {
-        Muted("مؤقت ٢٥ دقيقة لحاله، ما إله دخل بمهام اليوم.")
+        val focusOn = st.task.takeIf { it.isNotBlank() }?.let { id -> s.tasks.firstOrNull { it.id == id } }
+        Muted(if (focusOn != null) "جلسة تركيز لـ«${focusOn.baseTitle}»: وقتها بينحفظ بالمهمة. لما تخلص بتوقف المهمة مؤقتاً، وما بتنعلّم منجزة."
+            else "مؤقت ٢٥ دقيقة لحاله، ما إله دخل بمهام اليوم. لجلسة لمهمة: من قائمة المهمة ← جلسة تركيز.")
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { AnalogTimer(Repository.POMO_MS - left, Repository.POMO_MS, 200.dp) }
         Text(timerLabel(left), fontSize = 44.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -219,7 +222,7 @@ fun PomodoroReport(s: Snapshot, day: LocalDate, rename: (Int, String) -> Unit) {
         list.forEachIndexed { i, p ->
             Row(Modifier.fillMaxWidth().clickable { editing = i }, verticalAlignment = Alignment.CenterVertically) {
                 Text(fmt12(Clock.minuteOfDay(p.at)), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(80.dp))
-                Text(p.label.ifBlank { "بدون اسم · اضغط لتسمّيها" }, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge,
+                Text(p.label.ifBlank { "بدون اسم · اضغط لتسمّيها" } + if (p.task.isNotBlank()) " · (محسوبة بوقت المهمة)" else "", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge,
                     color = if (p.label.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
                 Text(durLabel(p.minutes), style = MaterialTheme.typography.bodyMedium)
             }

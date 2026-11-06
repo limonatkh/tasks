@@ -78,6 +78,8 @@ class TaskOps(
     val report: (() -> Unit)? = null,
     val note: (() -> Unit)? = null,
     val fixTime: (() -> Unit)? = null,
+    /** A focus session (pomodoro) whose time goes to this task. */
+    val focus: (() -> Unit)? = null,
     val close: (() -> Unit)? = null,
     val delete: (() -> Unit)? = null,
 )
@@ -90,31 +92,39 @@ fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps, yt: YtLink? = null) {
         if (yt != null) Muted("الحلقة ${yt.index + 1}" + (if (yt.total > 0) " من ${yt.total}" else "") + (if (yt.pos > 5) " · وقفت عند ${yt.pos / 60}:${"%02d".format(yt.pos % 60)}" else "") + if (t.units > 0) " · اليوم ${t.doneUnits}/${t.units} حلقة" else "")
         else Muted(durLabel(t.minutes) + (Prayer.names[t.period]?.let { " · فترة $it" } ?: "") + if (t.done) " · منجزة ✓" else "")
         fun go(f: (() -> Unit)?) = { close(); f?.invoke(); Unit }
+        var moving by remember { mutableStateOf(false) }
+        var more by remember { mutableStateOf(false) }
+        // Everyday choices first: start, done, put it somewhere else. Rare settings wait under "إعدادات المهمة".
         if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ops.start?.takeIf { !t.running }?.let { Action(if (yt != null) "▶ كمّل الحلقة ${yt.index + 1}" else "ابدأ", go(it), Modifier.weight(1f)) }
+            ops.start?.takeIf { !t.running }?.let { Action(if (yt != null) "▶ كمّل الحلقة ${yt.index + 1}" else if (t.spent > 0) "كمّل" else "ابدأ", go(it), Modifier.weight(1f)) }
             ops.finish?.let { Secondary("أنجزتها ✓", go(it), Modifier.weight(1f)) }
         }
-        Text("مكانها", style = MaterialTheme.typography.labelLarge)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Secondary(if (moving) "نقل ▲" else "نقل… (فترة، بكرا، يوم)", { moving = !moving }, Modifier.weight(1f))
+            ops.focus?.takeIf { !t.running && yt == null }?.let { Secondary("جلسة تركيز", go(it), Modifier.weight(1f)) }
+        }
+        if (moving || !t.open) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (t.open) {
                 ops.movePeriod?.let { FilterChip(false, go(it), label = { Text("فترة ثانية") }) }
-                ops.postpone?.let { FilterChip(false, go(it), label = { Text("تأجيل لبكرا") }) }
+                ops.postpone?.let { FilterChip(false, go(it), label = { Text("لبكرا") }) }
                 ops.moveDay?.let { FilterChip(false, go(it), label = { Text("ليوم ثاني…") }) }
                 ops.close?.let { FilterChip(false, go(it), label = { Text("إغلاق بدون إنجاز") }) }
             }
             ops.place?.let { FilterChip(false, go(it), label = { Text("فترتها دايماً") }) }
         }
-        Text("المهمة", style = MaterialTheme.typography.labelLarge)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ops.details?.let { FilterChip(false, go(it), label = { Text("تفاصيل") }) }
+            ops.note?.let { FilterChip(false, go(it), label = { Text("ملاحظة") }) }
+            ops.fixTime?.let { FilterChip(false, go(it), label = { Text("تصحيح الوقت") }) }
+            ops.report?.let { FilterChip(false, go(it), label = { Text("التقرير") }) }
+        }
+        TextButton(onClick = { more = !more }) { Text(if (more) "إعدادات المهمة ▲" else "إعدادات المهمة ▼") }
+        if (more) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             ops.edit?.let { FilterChip(false, go(it), label = { Text("تعديل (مدة، مجموعة، لون، رمز، تكرار)") }) }
             ops.duplicate?.let { FilterChip(false, go(it), label = { Text("نسخة") }) }
             if (t.open && !t.isPlan) ops.split?.let { FilterChip(false, go(it), label = { Text("قسّم") }) }
             ops.youtube?.let { FilterChip(false, go(it), label = { Text("قائمة يوتيوب") }) }
             ops.quran?.let { FilterChip(false, go(it), label = { Text("ورد القرآن") }) }
-            ops.note?.let { FilterChip(false, go(it), label = { Text("ملاحظة") }) }
-            ops.fixTime?.let { FilterChip(false, go(it), label = { Text("تصحيح الوقت") }) }
-            ops.report?.let { FilterChip(false, go(it), label = { Text("التقرير") }) }
             ops.delete?.let { FilterChip(false, { confirmDelete = true }, label = { Text("حذف", color = MaterialTheme.colorScheme.error) }) }
         }
     }

@@ -1264,20 +1264,44 @@ class Repository(private val context: Context) {
         left.size
     }
 
+    /**
+     * A focus session for one task: the pomodoro runs and the task's own timer runs with it, so the time is saved
+     * once, under the task. At the end the task pauses (it is not finished by itself).
+     */
+    suspend fun focus(id: String) = locked {
+        val now = System.currentTimeMillis()
+        val t = store.task(id)?.takeIf { it.open } ?: return@locked
+        if (!t.running) startLocked(t, now)
+        val st = JSONObject().put("end", now + POMO_MS).put("left", POMO_MS).put("startedAt", now).put("task", id)
+        store.put(Meta("pomo", st.toString()))
+        Alarms.pomoAlarm(context, st.optLong("end"))
+        replanLocked()
+    }
+
+    /** Pauses or starts the task a focus session is for, with the session. */
+    private suspend fun focusTaskLocked(st: JSONObject, run: Boolean, now: Long) {
+        val id = st.optString("task").ifBlank { return }
+        val t = store.task(id) ?: return
+        if (run && !t.running && t.open) startLocked(t, now)
+        if (!run && t.running) { store.put(t.copy(spent = Maths.spent(t, now), started = 0)); log(t, "pause", "انتهت جلسة التركيز") }
+    }
+
     /** Pomodoro: a 25-minute timer that is not one of the day's tasks. State: "end" while running, "left" while paused. */
     suspend fun pomo(action: String) = locked {
         val now = System.currentTimeMillis()
         val st = JSONObject(store.meta("pomo")?.takeIf { it.isNotBlank() } ?: "{}")
         val end = st.optLong("end"); val left = st.optLong("left", POMO_MS)
         when (action) {
-            "start" -> if (end == 0L) { st.put("end", now + left).put("startedAt", if (left == POMO_MS) now else st.optLong("startedAt", now)) }
-            "pause" -> if (end > 0) { st.put("left", (end - now).coerceAtLeast(0)).put("end", 0L) }
+            "start" -> if (end == 0L) { st.put("end", now + left).put("startedAt", if (left == POMO_MS) now else st.optLong("startedAt", now)); focusTaskLocked(st, true, now) }
+            "pause" -> if (end > 0) { st.put("left", (end - now).coerceAtLeast(0)).put("end", 0L); focusTaskLocked(st, false, now) }
             "reset" -> {
                 val used = POMO_MS - (if (end > 0) end - now else left)
-                if (used >= 5 * 60_000L) addPomoLocked(st.optLong("startedAt", now), (used / 60_000).toInt())
-                st.put("end", 0L).put("left", POMO_MS)
+                if (used >= 5 * 60_000L) addPomoLocked(st.optLong("startedAt", now), (used / 60_000).toInt(), st.optString("task"))
+                if (end > 0) focusTaskLocked(st, false, now)
+                st.put("end", 0L).put("left", POMO_MS).remove("task")
             }
         }
+        if (action != "start" || st.optString("task").isNotBlank()) replanLocked()
         store.put(Meta("pomo", st.toString()))
         Alarms.pomoAlarm(context, st.optLong("end"))
     }
@@ -1287,14 +1311,19 @@ class Repository(private val context: Context) {
         val st = JSONObject(store.meta("pomo")?.takeIf { it.isNotBlank() } ?: return@locked)
         val end = st.optLong("end")
         if (end == 0L || end > System.currentTimeMillis()) return@locked
-        addPomoLocked(st.optLong("startedAt", end - POMO_MS), (POMO_MS / 60_000).toInt())
+        addPomoLocked(st.optLong("startedAt", end - POMO_MS), (POMO_MS / 60_000).toInt(), st.optString("task"))
+        focusTaskLocked(st, false, end)
+        st.remove("task")
         store.put(Meta("pomo", st.put("end", 0L).put("left", POMO_MS).toString()))
+        replanLocked()
     }
 
-    private suspend fun addPomoLocked(startedAt: Long, minutes: Int) {
+    /** A session of a task is named after it and marked as already counted in the task's time. */
+    private suspend fun addPomoLocked(startedAt: Long, minutes: Int, taskId: String = "") {
         val day = Clock.dayOf(startedAt).toString()
         val a = org.json.JSONArray(store.meta("pomo:$day")?.takeIf { it.isNotBlank() } ?: "[]")
-        a.put(JSONObject().put("at", startedAt).put("min", minutes).put("label", ""))
+        val label = taskId.takeIf { it.isNotBlank() }?.let { store.task(it)?.baseTitle } ?: ""
+        a.put(JSONObject().put("at", startedAt).put("min", minutes).put("label", label).put("task", taskId))
         store.put(Meta("pomo:$day", a.toString()))
     }
 
