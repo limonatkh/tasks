@@ -28,5 +28,5 @@ elif mode.startswith("desc:"):
     want = mode[5:]
     for m in re.finditer(r'<node [^>]*?content-desc="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
         d, a, b, c, e = m.group(1), *map(int, m.groups()[1:])
-        if want in d and 300 < (b + e) // 2 < 2250:
+        if want in d and 150 < (b + e) // 2 < 2250:
             print((a + c) // 2, (b + e) // 2); break

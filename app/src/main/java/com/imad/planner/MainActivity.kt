@@ -1280,7 +1280,6 @@ fun TomorrowTab(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit) {
                     Action("تثبيت خطة بكرا", { nav.act { repo.materialize(tomorrow) } }, Modifier.fillMaxWidth())
                 } else if (entries.isNotEmpty()) Muted("الخطة مثبّتة. الأوقات بتترتب تلقائياً بكرا.")
                 Secondary("+ مهمة لبكرا", add, Modifier.fillMaxWidth())
-                if (s.settings.prayerMode) Action("رتّب بكرا بالسحب", { nav.dayPlan(tomorrow) }, Modifier.fillMaxWidth())
             }
         }
         if (entries.isEmpty()) item { Muted("لا شيء لبكرا بعد.") }

@@ -132,11 +132,11 @@ fun GoalRoad(p: Progress.GoalPath) {
             val road = Path().apply { val a = at(0f); moveTo(a.x, a.y); for (i in 1..40) { val b = at(i / 40f); lineTo(b.x, b.y) } }
             drawPath(road, trackC, style = Stroke(10.dp.toPx(), cap = StrokeCap.Round))
             if (p.fraction > 0f) {
-                val lp = Path().apply { val a = at(0f); moveTo(a.x, a.y); for (i in 1..40) { val b = at(i / 40f * p.fraction * 0.94f); lineTo(b.x, b.y) } }
+                val lp = Path().apply { val a = at(0f); moveTo(a.x, a.y); for (i in 1..40) { val b = at(i / 40f * p.fraction * 0.86f); lineTo(b.x, b.y) } }
                 drawPath(lp, lived, style = Stroke(10.dp.toPx(), cap = StrokeCap.Round))
             }
             for (q in 1..4) {
-                val c = at(q / 4f * 0.94f)
+                val c = at(q / 4f * 0.86f)
                 val passed = p.fraction >= q / 4f - 1e-6f
                 val next = !passed && p.fraction >= (q - 1) / 4f - 1e-6f
                 val r = if (next) 12.dp.toPx() else 10.dp.toPx()

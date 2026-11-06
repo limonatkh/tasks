@@ -121,7 +121,7 @@ fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps, yt: YtLink? = null, domai
             ops.finish?.let { f ->
                 val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
                 androidx.compose.material3.Button(onClick = go(f), modifier = Modifier.heightIn(min = 52.dp).pressScale(press), interactionSource = press, shape = RoundedCornerShape(16.dp),
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = doneColor(), contentColor = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.surface else Color.White)) {
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = doneColor(), contentColor = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.surface else if (androidx.compose.foundation.isSystemInDarkTheme()) Brand.ink else Color.White)) {
                     Text("✓ خلصت", fontWeight = FontWeight.Bold)
                 }
             }

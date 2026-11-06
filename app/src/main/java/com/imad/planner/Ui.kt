@@ -613,15 +613,15 @@ fun Sheet(title: String, close: () -> Unit, content: @Composable ColumnScope.() 
                             .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
                             .navigationBarsPadding().imePadding(),
                     ) {
-                        Box(Modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
-                            Box(Modifier.width(44.dp).heightIn(min = 5.dp, max = 5.dp).background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(3.dp)))
+                        CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+                        Box(Modifier.fillMaxWidth().padding(top = 4.dp, start = 6.dp, end = 6.dp)) {
+                            Box(Modifier.align(Alignment.Center).width(44.dp).heightIn(min = 5.dp, max = 5.dp).background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(3.dp)))
+                            IconButton(onClick = close, modifier = Modifier.align(Alignment.CenterEnd)) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
                         }
-                        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                                IconButton(onClick = close) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
-                            }
+                        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (title.isNotBlank()) Text(title, style = MaterialTheme.typography.titleLarge)
                             content()
+                        }
                         }
                     }
                 }
