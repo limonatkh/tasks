@@ -12,6 +12,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -69,6 +73,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -95,21 +102,81 @@ import kotlin.math.sin
 
 // ---------------- Theme ----------------
 
-/** Main accent: a clear warm terracotta, used for buttons and the timer. */
-val Salmon = Color(0xFFD9774F)
+/** Kept for older call sites: the lantern orange of the main buttons. */
+val Salmon = Color(0xFFFF8A3D)
 
-/** Colours the user can give to tasks and groups. */
+/**
+ * The «رحلة اليوم» palette. Bright where it matters (the header, the one main button, rewards), calm everywhere else.
+ * Text contrast on each: white on [sky] 6.1:1, ink on [lantern] 6.6:1, ink on [star] 10.7:1, white on [violet] 7.5:1,
+ * white on [mint] 5.3:1, ink on [container] 13.5:1.
+ */
+object Brand {
+    val sky = Color(0xFF2F56D9)
+    val skyLight = Color(0xFF4A6DE6)
+    val skyArc = Color(0xFF5B78EC)
+    val lantern = Color(0xFFFF8A3D)
+    val lanternShade = Color(0xFFE86A24)
+    val lanternCap = Color(0xFFFFB020)
+    val lanternText = Color(0xFFB85A1E)
+    val flame = Color(0xFFFFE08A)
+    val star = Color(0xFFFFD25E)
+    val violet = Color(0xFF5A3DB8)
+    val violetLight = Color(0xFF7457D6)
+    val mint = Color(0xFF137A53)
+    val container = Color(0xFFEAF0FF)
+    val bg = Color(0xFFF4F7FE)
+    val ink = Color(0xFF1C2340)
+    val muted = Color(0xFF5F6787)
+    val cheek = Color(0xFFF4A0A0)
+    val quran = Color(0xFF0F8C7E)
+    val sport = Color(0xFFDB6A2C)
+    val content = Color(0xFF5A3DB8)
+    val reading = Color(0xFF2F56D9)
+    val other = Color(0xFFE0A030)
+    val darkHeader = Color(0xFF26389A)
+}
+
+/** Colours the user can give to tasks and groups (kept in the same order: saved choices are their index). */
 val TagColors = listOf(
-    Color(0xFFD9774F), Color(0xFF6E9E7A), Color(0xFF5E8FB8), Color(0xFFD4A23A),
-    Color(0xFF9A78B0), Color(0xFF3F9E9A), Color(0xFFC46F86), Color(0xFF8A8F98),
+    Color(0xFFFF8A3D), Color(0xFF2FA36B), Color(0xFF2F56D9), Color(0xFFE0A030),
+    Color(0xFF7457D6), Color(0xFF0F8C7E), Color(0xFFC0587A), Color(0xFF8A90A8),
 )
 val TagNames = listOf("برتقالي", "أخضر", "أزرق", "ذهبي", "بنفسجي", "فيروزي", "وردي", "رمادي")
 
 fun tagColor(i: Int): Color? = TagColors.getOrNull(i)
 
-/** Black-and-white look on or off, and the switch for it (kept on the phone). */
-class ThemeChoice(val mono: Boolean, val set: (Boolean) -> Unit)
-val LocalThemeChoice = androidx.compose.runtime.staticCompositionLocalOf { ThemeChoice(false) {} }
+/** Black-and-white look on or off, and the switch for it (kept on the phone). Less motion too. */
+class ThemeChoice(val mono: Boolean, val set: (Boolean) -> Unit, val calm: Boolean = false, val setCalm: (Boolean) -> Unit = {})
+val LocalThemeChoice = androidx.compose.runtime.staticCompositionLocalOf { ThemeChoice(false, {}) }
+
+/** True when animations should be skipped: the phone's "remove animations" or the app's own "حركة أقل". */
+@Composable
+fun calmMotion(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val system = androidx.compose.runtime.remember {
+        runCatching { android.provider.Settings.Global.getFloat(context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) }.getOrDefault(1f) == 0f
+    }
+    return system || LocalThemeChoice.current.calm
+}
+
+/** Colour of the big header band on top of each page. */
+@Composable
+fun headerColor(): Color = when {
+    LocalThemeChoice.current.mono -> if (isSystemInDarkTheme()) Color(0xFF1A1A1A) else Color(0xFF000000)
+    isSystemInDarkTheme() -> Brand.darkHeader
+    else -> Brand.sky
+}
+
+/** The main action colour (one per screen) and the text on it. */
+@Composable
+fun ctaColor(): Color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.primary else Brand.lantern
+@Composable
+fun onCtaColor(): Color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onPrimary else Brand.ink
+
+/** Done is always this green, nothing else uses it. */
+@Composable
+fun doneColor(): Color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurface
+    else if (isSystemInDarkTheme()) Color(0xFF4FC48F) else Brand.mint
 
 private fun monoColors(dark: Boolean) = if (dark) darkColorScheme(
     primary = Color(0xFFFFFFFF), onPrimary = Color(0xFF000000),
@@ -145,55 +212,89 @@ private fun monoColors(dark: Boolean) = if (dark) darkColorScheme(
     error = Color(0xFFB3261E), onError = Color(0xFFFFFFFF),
 )
 
+private fun journeyColors(dark: Boolean) = if (dark) darkColorScheme(
+    primary = Color(0xFF9DB4FF), onPrimary = Color(0xFF0E1A4D),
+    primaryContainer = Color(0xFF26389A), onPrimaryContainer = Color(0xFFDCE4FF),
+    secondary = Color(0xFF6FD3A5), onSecondary = Color(0xFF00391F),
+    secondaryContainer = Color(0xFF0F4D35), onSecondaryContainer = Color(0xFFC8F2DD),
+    tertiary = Color(0xFFC2B2FF), onTertiary = Color(0xFF2A1A66),
+    tertiaryContainer = Color(0xFF3D2A8A), onTertiaryContainer = Color(0xFFE8E0FF),
+    background = Color(0xFF141833), onBackground = Color(0xFFECEFFA),
+    surface = Color(0xFF1E2347), onSurface = Color(0xFFECEFFA),
+    surfaceVariant = Color(0xFF2A3060), onSurfaceVariant = Color(0xFFA9B0CC),
+    surfaceTint = Color(0xFF1E2347), outline = Color(0xFF5D6590), outlineVariant = Color(0xFF343B6E),
+    surfaceBright = Color(0xFF2A3060), surfaceDim = Color(0xFF141833),
+    surfaceContainerLowest = Color(0xFF10142B), surfaceContainerLow = Color(0xFF191E3F),
+    surfaceContainer = Color(0xFF1E2347), surfaceContainerHigh = Color(0xFF262C55),
+    surfaceContainerHighest = Color(0xFF2E3562),
+    error = Color(0xFFFFB4A8), onError = Color(0xFF5C1209),
+) else lightColorScheme(
+    primary = Brand.sky, onPrimary = Color.White,
+    primaryContainer = Brand.container, onPrimaryContainer = Brand.ink,
+    secondary = Brand.mint, onSecondary = Color.White,
+    secondaryContainer = Color(0xFFDDF3EA), onSecondaryContainer = Color(0xFF0B3D2A),
+    tertiary = Brand.violet, onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFEDE7FF), onTertiaryContainer = Color(0xFF2A1A66),
+    background = Brand.bg, onBackground = Brand.ink,
+    surface = Color.White, onSurface = Brand.ink,
+    surfaceVariant = Color(0xFFE3EAFB), onSurfaceVariant = Brand.muted,
+    surfaceTint = Color.White, outline = Color(0xFFA7B0CF), outlineVariant = Color(0xFFDCE3F5),
+    surfaceBright = Color.White, surfaceDim = Color(0xFFE1E8FA),
+    surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xFFF9FBFF),
+    surfaceContainer = Color(0xFFF1F5FE), surfaceContainerHigh = Color(0xFFE9EFFC),
+    surfaceContainerHighest = Color(0xFFE1E8FA),
+    error = Color(0xFFB3261E), onError = Color.White,
+)
+
+/** Rounded happy Arabic for titles and big numbers. */
+val DisplayFont = androidx.compose.ui.text.font.FontFamily(
+    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.Bold),
+    androidx.compose.ui.text.font.Font(R.font.baloo_extrabold, FontWeight.ExtraBold),
+    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.SemiBold),
+    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.Medium),
+    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.Normal),
+)
+
+/** Clear Arabic for everything people read. */
+val BodyFont = androidx.compose.ui.text.font.FontFamily(
+    androidx.compose.ui.text.font.Font(R.font.plex_regular, FontWeight.Normal),
+    androidx.compose.ui.text.font.Font(R.font.plex_regular, FontWeight.Light),
+    androidx.compose.ui.text.font.Font(R.font.plex_semibold, FontWeight.Medium),
+    androidx.compose.ui.text.font.Font(R.font.plex_semibold, FontWeight.SemiBold),
+    androidx.compose.ui.text.font.Font(R.font.plex_bold, FontWeight.Bold),
+    androidx.compose.ui.text.font.Font(R.font.plex_bold, FontWeight.ExtraBold),
+)
+
+private fun journeyType(): Typography {
+    val b = Typography()
+    fun TextStyle.body() = copy(fontFamily = BodyFont)
+    fun TextStyle.display() = copy(fontFamily = DisplayFont)
+    return Typography(
+        displayLarge = b.displayLarge.display(), displayMedium = b.displayMedium.display(), displaySmall = b.displaySmall.display(),
+        headlineLarge = b.headlineLarge.display(), headlineMedium = b.headlineMedium.display(),
+        headlineSmall = TextStyle(fontFamily = DisplayFont, fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold),
+        titleLarge = TextStyle(fontFamily = DisplayFont, fontSize = 25.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold),
+        titleMedium = TextStyle(fontFamily = BodyFont, fontSize = 19.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold),
+        titleSmall = TextStyle(fontFamily = BodyFont, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
+        bodyLarge = TextStyle(fontFamily = BodyFont, fontSize = 17.sp, lineHeight = 27.sp),
+        bodyMedium = TextStyle(fontFamily = BodyFont, fontSize = 15.sp, lineHeight = 24.sp),
+        bodySmall = b.bodySmall.body(),
+        labelLarge = TextStyle(fontFamily = BodyFont, fontSize = 16.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
+        labelMedium = b.labelMedium.body(), labelSmall = b.labelSmall.body(),
+    )
+}
+
 @Composable
 fun PlannerTheme(mono: Boolean = false, content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
-    // Clear but calm: warm greys, readable text, one terracotta accent, sage and blue as helpers.
-    val colors = if (mono) monoColors(dark) else if (dark) darkColorScheme(
-        primary = Color(0xFFE8916B), onPrimary = Color(0xFF2B1308),
-        primaryContainer = Color(0xFF4A2E22), onPrimaryContainer = Color(0xFFFFDCCD),
-        secondary = Color(0xFF9FC2A7), onSecondary = Color(0xFF142219),
-        secondaryContainer = Color(0xFF2C3A30), onSecondaryContainer = Color(0xFFD6EADB),
-        tertiary = Color(0xFF8FB8D6), onTertiary = Color(0xFF0E2433),
-        tertiaryContainer = Color(0xFF263845), onTertiaryContainer = Color(0xFFD3E6F3),
-        background = Color(0xFF1C1B19), onBackground = Color(0xFFEDE9E3),
-        surface = Color(0xFF282725), onSurface = Color(0xFFEDE9E3),
-        surfaceVariant = Color(0xFF34322F), onSurfaceVariant = Color(0xFFB3ADA3),
-        surfaceTint = Color(0xFF282725), outline = Color(0xFF6B665E), outlineVariant = Color(0xFF3F3C38),
-        surfaceBright = Color(0xFF34322F), surfaceDim = Color(0xFF1C1B19),
-        surfaceContainerLowest = Color(0xFF151413), surfaceContainerLow = Color(0xFF211F1D),
-        surfaceContainer = Color(0xFF242321), surfaceContainerHigh = Color(0xFF302E2B),
-        surfaceContainerHighest = Color(0xFF3A3834),
-        error = Color(0xFFFF9C8A), onError = Color(0xFF3A0E07),
-    ) else lightColorScheme(
-        primary = Color(0xFFB8572F), onPrimary = Color(0xFFFFFFFF),
-        primaryContainer = Color(0xFFFBE0D3), onPrimaryContainer = Color(0xFF4A1C08),
-        secondary = Color(0xFF4F7A5B), onSecondary = Color(0xFFFFFFFF),
-        secondaryContainer = Color(0xFFDDEBE0), onSecondaryContainer = Color(0xFF173222),
-        tertiary = Color(0xFF3F6F92), onTertiary = Color(0xFFFFFFFF),
-        tertiaryContainer = Color(0xFFDAE8F3), onTertiaryContainer = Color(0xFF0D2B40),
-        background = Color(0xFFF4F1EC), onBackground = Color(0xFF26231F),
-        surface = Color(0xFFFFFFFF), onSurface = Color(0xFF26231F),
-        surfaceVariant = Color(0xFFE9E4DC), onSurfaceVariant = Color(0xFF6B655B),
-        surfaceTint = Color(0xFFFFFFFF), outline = Color(0xFFB9B2A6), outlineVariant = Color(0xFFDDD7CD),
-        surfaceBright = Color(0xFFFFFFFF), surfaceDim = Color(0xFFE6E1D9),
-        surfaceContainerLowest = Color(0xFFFFFFFF), surfaceContainerLow = Color(0xFFF9F7F3),
-        surfaceContainer = Color(0xFFF4F1EC), surfaceContainerHigh = Color(0xFFEDE8E1),
-        surfaceContainerHighest = Color(0xFFE5DFD6),
-        error = Color(0xFFB3261E), onError = Color(0xFFFFFFFF),
-    )
     MaterialTheme(
-        colorScheme = colors,
+        colorScheme = if (mono) monoColors(dark) else journeyColors(dark),
         shapes = androidx.compose.material3.Shapes(
-            small = RoundedCornerShape(14.dp), medium = RoundedCornerShape(20.dp), large = RoundedCornerShape(24.dp),
+            extraSmall = RoundedCornerShape(10.dp),
+            small = RoundedCornerShape(14.dp), medium = RoundedCornerShape(20.dp), large = RoundedCornerShape(26.dp),
+            extraLarge = RoundedCornerShape(30.dp),
         ),
-        typography = Typography(
-            titleLarge = TextStyle(fontSize = 26.sp, fontWeight = FontWeight.SemiBold),
-            titleMedium = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
-            bodyLarge = TextStyle(fontSize = 17.sp),
-            bodyMedium = TextStyle(fontSize = 16.sp),
-            labelLarge = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium),
-        ),
+        typography = journeyType(),
         content = content,
     )
 }
@@ -312,20 +413,36 @@ fun TimeLine(planned: Long, minutes: Int, end: Boolean = false) {
 
 @Composable
 fun Action(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Button(
-        onClick = onClick, modifier = modifier.heightIn(min = 52.dp), enabled = enabled,
-        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary),
-    ) { Text(label, fontWeight = FontWeight.Bold) }
+        onClick = onClick, modifier = modifier.heightIn(min = 52.dp).pressScale(press), enabled = enabled, interactionSource = press,
+        shape = RoundedCornerShape(16.dp),
+        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = ctaColor(), contentColor = onCtaColor()),
+    ) { Text(label, fontWeight = FontWeight.ExtraBold, fontFamily = DisplayFont, fontSize = 18.sp) }
 }
 
 @Composable
 fun Secondary(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Button(
-        onClick = onClick, modifier = modifier.heightIn(min = 48.dp), enabled = enabled,
+        onClick = onClick, modifier = modifier.heightIn(min = 48.dp).pressScale(press), enabled = enabled, interactionSource = press,
+        shape = RoundedCornerShape(16.dp),
         colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurface,
+            containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
         ),
-    ) { Text(label) }
+    ) { Text(label, fontWeight = FontWeight.SemiBold) }
+}
+
+/** Pressed things sink a little (to 96%) and come back: 120 ms, a soft spring. Nothing when motion is calmed. */
+@Composable
+fun Modifier.pressScale(source: androidx.compose.foundation.interaction.InteractionSource): Modifier {
+    val pressed by source.collectIsPressedAsState()
+    val calm = calmMotion()
+    val k by androidx.compose.animation.core.animateFloatAsState(
+        if (pressed && !calm) 0.96f else 1f,
+        androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 900f), label = "press",
+    )
+    return this.graphicsLayer { scaleX = k; scaleY = k }
 }
 
 /** Clock-face timer: a ring shows the time left, the hand shows where you are. */
@@ -464,17 +581,41 @@ fun TimeDialog(initial: Int, close: () -> Unit, pick: (Int) -> Unit) {
     )
 }
 
+/**
+ * A card that comes up from the bottom (260 ms, eases in), the page behind dims. Back or the × closes it.
+ * Used for every sheet in the app, so they all open and close the same way.
+ */
 @Composable
 fun Sheet(title: String, close: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    val calm = calmMotion()
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-            Card(Modifier.fillMaxWidth().padding(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background)) {
-                Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                        IconButton(onClick = close) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
+            val shown = remember { androidx.compose.animation.core.MutableTransitionState(calm) }.apply { targetState = true }
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = close)
+                .statusBarsPadding(), contentAlignment = Alignment.BottomCenter) {
+                val cap = maxHeight * 0.94f
+                androidx.compose.animation.AnimatedVisibility(
+                    visibleState = shown,
+                    enter = androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(260, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { it / 2 } +
+                        androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)),
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().heightIn(max = cap)
+                            .background(MaterialTheme.colorScheme.background, RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
+                            .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
+                            .navigationBarsPadding().imePadding(),
+                    ) {
+                        Box(Modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.width(44.dp).heightIn(min = 5.dp, max = 5.dp).background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(3.dp)))
+                        }
+                        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                                IconButton(onClick = close) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
+                            }
+                            content()
+                        }
                     }
-                    content()
                 }
             }
         }

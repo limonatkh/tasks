@@ -44,6 +44,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.heightIn
 import java.time.LocalDate
 import java.util.UUID
 
@@ -85,47 +88,79 @@ class TaskOps(
 )
 
 @Composable
-fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps, yt: YtLink? = null) {
+fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps, yt: YtLink? = null, domain: Domain = Domain.Other, look: String? = null, goal: GoalLink? = null) {
     var confirmDelete by remember { mutableStateOf(false) }
-    Sheet(t.title, close) {
-        if (t.details.isNotBlank()) Muted(t.details)
-        if (yt != null) Muted("الحلقة ${yt.index + 1}" + (if (yt.total > 0) " من ${yt.total}" else "") + (if (yt.pos > 5) " · وقفت عند ${yt.pos / 60}:${"%02d".format(yt.pos % 60)}" else "") + if (t.units > 0) " · اليوم ${t.doneUnits}/${t.units} حلقة" else "")
-        else Muted(durLabel(t.minutes) + (Prayer.names[t.period]?.let { " · فترة $it" } ?: "") + if (t.done) " · منجزة ✓" else "")
+    Sheet("", close) {
         fun go(f: (() -> Unit)?) = { close(); f?.invoke(); Unit }
         var moving by remember { mutableStateOf(false) }
         var more by remember { mutableStateOf(false) }
-        // Everyday choices first: start, done, put it somewhere else. Rare settings wait under "إعدادات المهمة".
-        if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ops.start?.takeIf { !t.running }?.let { Action(if (yt != null) "▶ كمّل الحلقة ${yt.index + 1}" else if (t.spent > 0) "كمّل" else "ابدأ", go(it), Modifier.weight(1f)) }
-            ops.finish?.let { Secondary("أنجزتها ✓", go(it), Modifier.weight(1f)) }
-        }
-        if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Secondary(if (moving) "نقل ▲" else "نقل…", { moving = !moving }, Modifier.weight(1f))
-            ops.focus?.takeIf { !t.running && yt == null }?.let { Secondary("جلسة تركيز", go(it), Modifier.weight(1f)) }
-        }
-        if (moving || !t.open) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (t.open) {
-                ops.movePeriod?.let { FilterChip(false, go(it), label = { Text("فترة ثانية") }) }
-                ops.postpone?.let { FilterChip(false, go(it), label = { Text("لبكرا") }) }
-                ops.moveDay?.let { FilterChip(false, go(it), label = { Text("ليوم ثاني…") }) }
-                ops.close?.let { FilterChip(false, go(it), label = { Text("إغلاق بدون إنجاز") }) }
+        // Who it is: its drawing, name and where it sits.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            DomainTile(domain, 68.dp, look, done = !t.open)
+            Column(Modifier.weight(1f)) {
+                Text(t.title, fontFamily = DisplayFont, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, lineHeight = 30.sp)
+                if (yt != null) Muted("الحلقة ${yt.index + 1}" + (if (yt.total > 0) " من ${yt.total}" else "") + (if (yt.pos > 5) " · وقفت عند ${yt.pos / 60}:${"%02d".format(yt.pos % 60)}" else "") + if (t.units > 0) " · اليوم ${t.doneUnits}/${t.units} حلقة" else "")
+                else Muted(listOfNotNull(Prayer.names[t.period], durLabel(t.minutes), if (t.done) "منجزة ✓" else null, if (t.running) "شغّالة هلأ" else null).joinToString(" · "))
             }
-            ops.place?.let { FilterChip(false, go(it), label = { Text("فترتها دايماً") }) }
+        }
+        if (t.details.isNotBlank()) Muted(t.details)
+        // Which goal it feeds, one tap to it.
+        goal?.let { g ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.tertiaryContainer).clickable(onClick = go(g.open)).padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("⛰", fontSize = 18.sp)
+                Text("بتخدم هدف «${g.name}»", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                Text(g.line + " ←", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.onTertiaryContainer)
+            }
+        }
+        // Everyday choices first: start, done.
+        if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ops.start?.takeIf { !t.running }?.let { Action(if (yt != null) "▶ كمّل الحلقة ${yt.index + 1}" else if (t.spent > 0) "كمّل" else "ابدأ جلسة", go(it), Modifier.weight(1f)) }
+            ops.finish?.let { f ->
+                val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                androidx.compose.material3.Button(onClick = go(f), modifier = Modifier.heightIn(min = 52.dp).pressScale(press), interactionSource = press, shape = RoundedCornerShape(16.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = doneColor(), contentColor = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.surface else Color.White)) {
+                    Text("✓ خلصت", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        // The four things done most to a task, as big tiles.
+        if (t.open) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickTile("⇄", if (moving) "نقل ▲" else "نقل", Modifier.weight(1f)) { moving = !moving }
+            ops.postpone?.let { QuickTile("☾", "بكرا", Modifier.weight(1f), go(it)) }
+            ops.fixTime?.let { QuickTile("±", "الوقت", Modifier.weight(1f), go(it)) }
+            ops.edit?.let { QuickTile("✎", "تعديل", Modifier.weight(1f), go(it)) }
+        }
+        androidx.compose.animation.AnimatedVisibility(moving || !t.open) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (t.open) {
+                    ops.movePeriod?.let { FilterChip(false, go(it), label = { Text("فترة ثانية") }) }
+                    ops.moveDay?.let { FilterChip(false, go(it), label = { Text("ليوم ثاني…") }) }
+                    ops.close?.let { FilterChip(false, go(it), label = { Text("إغلاق بدون إنجاز") }) }
+                }
+                ops.place?.let { FilterChip(false, go(it), label = { Text("فترتها دايماً") }) }
+            }
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ops.focus?.takeIf { !t.running && yt == null }?.let { FilterChip(false, go(it), label = { Text("جلسة تركيز 🍎") }) }
             ops.details?.let { FilterChip(false, go(it), label = { Text("تفاصيل") }) }
             ops.note?.let { FilterChip(false, go(it), label = { Text("ملاحظة") }) }
-            ops.fixTime?.let { FilterChip(false, go(it), label = { Text("تصحيح الوقت") }) }
-            ops.report?.let { FilterChip(false, go(it), label = { Text("التقرير") }) }
+            ops.report?.let { FilterChip(false, go(it), label = { Text("السجل والتقرير") }) }
+            if (!t.open) ops.fixTime?.let { FilterChip(false, go(it), label = { Text("تصحيح الوقت") }) }
+            if (!t.open) ops.edit?.let { FilterChip(false, go(it), label = { Text("تعديل") }) }
         }
         TextButton(onClick = { more = !more }) { Text(if (more) "إعدادات المهمة ▲" else "إعدادات المهمة ▼") }
-        if (more) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            ops.edit?.let { FilterChip(false, go(it), label = { Text("تعديل (مدة، مجموعة، لون، رمز، تكرار)") }) }
-            ops.duplicate?.let { FilterChip(false, go(it), label = { Text("نسخة") }) }
-            if (t.open && !t.isPlan) ops.split?.let { FilterChip(false, go(it), label = { Text("قسّم") }) }
-            ops.youtube?.let { FilterChip(false, go(it), label = { Text("قائمة يوتيوب") }) }
-            ops.quran?.let { FilterChip(false, go(it), label = { Text("ورد القرآن") }) }
-            ops.delete?.let { FilterChip(false, { confirmDelete = true }, label = { Text("حذف", color = MaterialTheme.colorScheme.error) }) }
+        androidx.compose.animation.AnimatedVisibility(more) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ops.edit?.let { FilterChip(false, go(it), label = { Text("مدة، مجموعة، لون، رمز، تكرار") }) }
+                ops.duplicate?.let { FilterChip(false, go(it), label = { Text("نسخة") }) }
+                if (t.open && !t.isPlan) ops.split?.let { FilterChip(false, go(it), label = { Text("قسّم") }) }
+                ops.youtube?.let { FilterChip(false, go(it), label = { Text("قائمة يوتيوب") }) }
+                ops.quran?.let { FilterChip(false, go(it), label = { Text("ورد القرآن") }) }
+                ops.delete?.let { FilterChip(false, { confirmDelete = true }, label = { Text("حذف", color = MaterialTheme.colorScheme.error) }) }
+            }
         }
     }
     if (confirmDelete) AlertDialog(
@@ -173,14 +208,15 @@ fun SwipeRow(start: (() -> Unit)?, defer: (() -> Unit)?, deferMode: String, cont
                 // which is not mirrored the same way as its values.
                 val toStart = shift > 0
                 if ((toStart && start == null) || (!toStart && defer == null)) return@Box
-                val color = if (toStart) Color(0xFF2E9E5B) else Color(0xFF3D7BF7)
+                val color = if (toStart) Brand.lantern else Brand.sky
+                val fg = if (toStart) Brand.ink else Color.White
                 Box(
                     Modifier.fillMaxSize().background(color, RoundedCornerShape(20.dp)).padding(horizontal = 22.dp),
                     contentAlignment = if (shift > 0) AbsoluteAlignment.CenterLeft else AbsoluteAlignment.CenterRight,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(if (toStart) "▶" else "⏭", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
-                        Text(if (toStart) "ابدأ الآن" else swipeLabel(deferMode), color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        Text(if (toStart) "▶" else "⏭", color = fg, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                        Text(if (toStart) "ابدأ الآن" else swipeLabel(deferMode), color = fg, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     }
                 }
             }
@@ -403,5 +439,23 @@ fun GroupsSheet(s: Snapshot, close: () -> Unit, save: (List<Group>) -> Unit, set
         }
         Secondary("+ مجموعة جديدة", { list.add(Group("g-" + UUID.randomUUID().toString().take(6), "مجموعة جديدة", "any")) }, Modifier.fillMaxWidth())
         Action("حفظ", { save(list.filter { it.name.isNotBlank() }); close() }, Modifier.fillMaxWidth())
+    }
+}
+
+
+/** The goal a task feeds: its name, how far it is ("٦ من ١٢"), and how to open it. */
+class GoalLink(val name: String, val line: String, val open: () -> Unit)
+
+/** A big square choice with a sign and a word. */
+@Composable
+fun QuickTile(sign: String, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Column(
+        modifier.heightIn(min = 66.dp).pressScale(press).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.primaryContainer)
+            .clickable(interactionSource = press, indication = androidx.compose.foundation.LocalIndication.current, onClick = onClick).padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+    ) {
+        Text(sign, fontSize = 20.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
     }
 }

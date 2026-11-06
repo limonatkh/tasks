@@ -40,6 +40,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.lazy.LazyListScope
@@ -138,8 +141,17 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 val ui = remember { getSharedPreferences("ui", MODE_PRIVATE) }
                 var mono by remember { mutableStateOf(ui.getBoolean("mono", false)) }
-                CompositionLocalProvider(LocalThemeChoice provides ThemeChoice(mono) { v -> ui.edit().putBoolean("mono", v).apply(); mono = v }) {
+                var calm by remember { mutableStateOf(ui.getBoolean("calm", false)) }
+                CompositionLocalProvider(LocalThemeChoice provides ThemeChoice(mono, { v -> ui.edit().putBoolean("mono", v).apply(); mono = v },
+                    calm, { v -> ui.edit().putBoolean("calm", v).apply(); calm = v })) {
                 PlannerTheme(mono) {
+                    // The status bar takes the header's colour, with light icons on it.
+                    val bar = headerColor()
+                    androidx.compose.runtime.SideEffect {
+                        @Suppress("DEPRECATION")
+                        window.statusBarColor = bar.toArgb()
+                        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
+                    }
                     // Asked once on this phone; after the right password it never asks again.
                     val prefs = remember { getSharedPreferences("lock", MODE_PRIVATE) }
                     var unlocked by remember { mutableStateOf(prefs.getBoolean("unlocked", false)) }
@@ -430,6 +442,20 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         if (route != null) routeDone()
     }
 
+    // Points and levels, from the saved history only.
+    val xpOn = snap.meta["xp"] != "0"
+    val summary = remember(tasks, goals, logs, parsedSettings.groups, parsedSettings.icons) { Progress.summary(tasks, goals, logs, parsedSettings, Clock.today()) }
+    var progressOpen by remember { mutableStateOf(false) }
+    var levelUp by remember { mutableStateOf(false) }
+    val seenLevel = metaMap["levelSeen"]?.toIntOrNull()
+    LaunchedEffect(summary.total.level, seenLevel, xpOn, metas.isNotEmpty()) {
+        if (!xpOn || metas.isEmpty()) return@LaunchedEffect
+        // The first time, the level reached by the past is just noted: no party for history.
+        if (seenLevel == null) runCatching { repo.setSetting("levelSeen", summary.total.level.toString()) }
+        else if (summary.total.level > seenLevel) levelUp = true
+    }
+    val cheerFor: suspend (String) -> Unit = { id -> repo.store.task(id)?.let { Cheer.fire(Progress.pointsOf(it), it.baseTitle) } }
+
     val nav = Nav(
         act = act, openTask = { editor = it }, newTask = { creating = it }, openRule = { ruleEditor = it },
         openGoal = { goalEditor = it }, openPlan = { planEditor = it }, newGoal = { newGoal = true }, play = play,
@@ -443,7 +469,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         keepRest = { keepRestFor = it },
         quickMove = { moveFor = it },
         details = { detailsFor = it },
-        finish = { t -> if ((snap.targetOf(t)?.goal ?: 0) > 0) finishFor = t else act { repo.finish(t.id) } },
+        finish = { t -> if ((snap.targetOf(t)?.goal ?: 0) > 0) finishFor = t else act { repo.finish(t.id); cheerFor(t.id) } },
         start = { t, viaTimer -> startTask(t, viaTimer) },
         pomo = { pomoOpen = true },
         monthPlan = { monthPlan = true },
@@ -472,48 +498,62 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     val today = snap.today
     val emptyTask = { day: LocalDate -> Task(title = "", minutes = 30, day = day.toString()) }
 
+    val tabNames = listOf("اليوم", "التخطيط", "الأهداف", "المراجعة")
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-                title = {
-                    Column {
-                        Text(listOf("مهام اليوم", "التخطيط", "الأهداف", "التقارير")[tab], style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-                        Text(dayLabel(today), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
+            val minute = Clock.minuteOfDay(now)
+            val periods = if (snap.settings.prayerMode) snap.settings.periodsOn(today) else emptyList()
+            PageHeader(
+                title = tabNames[tab],
+                sub = when (tab) { 1 -> "بكرا والأسبوع والشهر"; 2 -> "السنة وطريق كل هدف"; else -> dayLabel(today) },
                 actions = {
+                    if (tab == 0 && xpOn) LevelChip(summary.total) { tab = 2 }
+                    if (tab == 3) HeaderButton("الفيد", { igOpen = true }) { Text("الفيد", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
                     Box {
-                        IconButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, contentDescription = "إضافة") }
+                        HeaderButton("إضافة", { addMenu = true }) { Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White) }
                         DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
                             DropdownMenuItem(text = { Text("مهمة جديدة") }, onClick = { addMenu = false; creating = emptyTask(if (tab == 1) today.plusDays(1) else today) })
                             DropdownMenuItem(text = { Text("هدف جديد") }, onClick = { addMenu = false; newGoal = true })
                             DropdownMenuItem(text = { Text("▶ قائمة مشاهدة يوتيوب") }, onClick = { addMenu = false; watchNew = true })
                         }
                     }
-                    IconButton(onClick = { settingsOpen = true }) { Icon(Icons.Filled.Settings, contentDescription = "الإعدادات") }
-                    // The feed is out of the way on purpose: only on the reports page.
-                    if (tab == 3) TextButton(onClick = { igOpen = true }) { Text("الفيد") }
+                    HeaderButton("الإعدادات", { settingsOpen = true }) { Icon(Icons.Filled.Settings, contentDescription = null, tint = Color.White) }
+                },
+                below = {
+                    if (tab == 0 && periods.isNotEmpty() && minute >= snap.settings.dayStart && minute < snap.settings.dayEnd) {
+                        val nowKey = snap.settings.periodAt(today, minute)
+                        val i = periods.indexOfFirst { it.key == nowKey }
+                        val cur = periods.getOrNull(i)
+                        val next = periods.getOrNull(i + 1)
+                        val line = listOfNotNull(cur?.name, next?.let { "باقي ${untilLabel(minute, it.start)} لل${it.name.removePrefix("ال")}" }).joinToString(" · ")
+                        DayArc(periods, minute, line)
+                    }
                 },
             )
         },
-        bottomBar = {
-            TextTabs(listOf("اليوم", "التخطيط", "الأهداف", "التقارير"), tab) { tab = it }
-        },
+        bottomBar = { JourneyNav(tabNames, tab) { tab = it } },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            when (tab) {
-                0 -> TodayTab(snap, repo, nav, add = { key -> creating = emptyTask(today).copy(period = key) }, askClose = { closeDay = true },
-                    closeDay = { mode -> act { val n = repo.closeDay(mode); snackbar.showSnackbar((if (mode == "carry") "ترحّلت $n مهام لليوم اللي بعده" else "انسكّر اليوم") + if (repo.lastClosed != Clock.today()) " (يوم ${repo.lastClosed?.let { dayLabel(it) }})" else "") } },
-                    goTomorrow = { tab = 1 })
-                1 -> PlanningTab(snap, nav) { TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) }) }
-                2 -> GoalsTab(snap, nav)
-                else -> ReportsTab(snap, nav, backup = { exporter.launch("planner-backup-$today.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }, repo = repo)
+            androidx.compose.animation.Crossfade(tab, animationSpec = androidx.compose.animation.core.tween(if (calmMotion()) 0 else 220), label = "tab") { page ->
+                Box(Modifier.fillMaxSize()) {
+                    when (page) {
+                        0 -> TodayTab(snap, repo, nav, add = { key -> creating = emptyTask(today).copy(period = key) }, askClose = { closeDay = true },
+                            closeDay = { mode -> act { val n = repo.closeDay(mode); snackbar.showSnackbar((if (mode == "carry") "ترحّلت $n مهام لليوم اللي بعده" else "انسكّر اليوم") + if (repo.lastClosed != Clock.today()) " (يوم ${repo.lastClosed?.let { dayLabel(it) }})" else "") } },
+                            goTomorrow = { tab = 1 })
+                        1 -> PlanningTab(snap, nav) { TomorrowTab(snap, repo, nav, add = { creating = emptyTask(today.plusDays(1)) }) }
+                        2 -> GoalsTab(snap, nav, if (xpOn) summary else null) { progressOpen = true }
+                        else -> ReportsTab(snap, nav, backup = { exporter.launch("planner-backup-$today.json") }, restore = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }, repo = repo)
+                    }
+                }
             }
+            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 90.dp)) { CheerLayer(xpOn) }
         }
     }
+
+    if (progressOpen) ProgressSheet(summary) { progressOpen = false }
+    if (levelUp) LevelUpDialog(summary) { levelUp = false; act { repo.setSetting("levelSeen", summary.total.level.toString()) } }
 
     editor?.let { t ->
         val fresh = tasks.firstOrNull { it.id == t.id } ?: t
@@ -595,7 +635,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     detailsFor?.let { t -> DetailsDialog(t, close = { detailsFor = null }) { text -> act { repo.setDetails(t.id, text) } } }
     finishFor?.let { t ->
         FinishAmountDialog(t, snap.targetOf(t) ?: Target(), close = { finishFor = null }) { n ->
-            act { repo.addTargetDone(t.day, seriesOf(t), n); repo.finish(t.id) }
+            act { repo.addTargetDone(t.day, seriesOf(t), n); repo.finish(t.id); cheerFor(t.id) }
         }
     }
     quranFor?.let { t -> QuranLinkSheet(t, snap.settings.quranLinks[seriesOf(t)], close = { quranFor = null }) { l -> act { repo.setQuranLink(seriesOf(t), l) } } }
@@ -666,9 +706,12 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             note = { noteFor = t },
             close = { act { repo.deferTask(t.id, "close") } },
             delete = { act { repo.delete(t.id) } },
-        ), yt = snap.settings.ytLinks[seriesOf(t)])
+        ), yt = snap.settings.ytLinks[seriesOf(t)], domain = domainOf(t, snap.settings), look = snap.settings.icons[seriesOf(t)],
+            goal = (t.goalId ?: t.ruleId?.let { id -> rules.firstOrNull { it.id == id }?.goalId })?.let { gid -> goals.firstOrNull { it.id == gid } }?.let { g ->
+                GoalLink(g.name, "${num(g.current)} من ${num(g.reference)}") { goalEditor = g }
+            })
     }
-    if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true }, openPrayers = { prayerOpen = true },
+    if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true }, openPrayers = { prayerOpen = true }, xpOn = xpOn,
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false) })
     if (closeDay) CloseDayDialog(snap.tasks.filter { it.day == today.toString() && it.state != "skipped" }, now, close = { closeDay = false },
         tomorrow = snap.tasks.filter { it.day == today.plusDays(1).toString() },
@@ -696,8 +739,9 @@ fun todayTasks(s: Snapshot) = s.tasks.filter { it.day == s.today.toString() && i
 
 /** Frame colours of a task in the period view. */
 object Status {
-    val done = Color(0xFF4FA36C)
-    val missed = Color(0xFFD0574E)
+    val done = Brand.mint
+    /** Needs a look: warm orange text, never red on the planner. */
+    val missed = Brand.lanternText
 }
 
 /** done (green), running (accent), closed without doing (a quiet grey) or nothing. No red on the day's page. */
@@ -718,7 +762,7 @@ fun periodAccent(key: String): Color {
         "dhuhr" -> Color(0xFFE0A030)
         "asr" -> Color(0xFFDB7A3C)
         "maghrib" -> Color(0xFFC0587A)
-        "isha" -> Color(0xFF4F6D7A)
+        "isha" -> Color(0xFF3B4A8C)
         else -> MaterialTheme.colorScheme.outline
     }
 }
@@ -740,11 +784,9 @@ fun TodayTab(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, ask
 fun NightPanel(s: Snapshot, todays: List<Task>, beforeWake: Boolean, closeDay: (String) -> Unit, goTomorrow: () -> Unit, reopen: () -> Unit = {}) {
     val left = todays.count { it.open }
     if (beforeWake) Panel {
-        Text("وقت النوم", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-        Text("يومك بيبدأ الساعة ${fmt12(s.settings.dayStart)}", style = MaterialTheme.typography.bodyLarge)
+        NourNote(NourMood.Sleep, "وقت النوم", "يومك بيبدأ الساعة ${fmt12(s.settings.dayStart)}")
     } else Panel {
-        Text("انتهى اليوم", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-        Text("${todays.count { it.done }} منجزة من ${todays.size}", style = MaterialTheme.typography.bodyLarge)
+        NourNote(NourMood.Sleep, "انتهى اليوم", "${todays.count { it.done }} منجزة من ${todays.size}")
         if (left > 0 && !s.closedToday) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Action("ترحيل لبكرا", { closeDay("carry") }, Modifier.weight(1f))
@@ -807,8 +849,9 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             val left = java.time.temporal.ChronoUnit.DAYS.between(s.today, until)
             if (left <= 3) item {
                 Text(if (left < 0) "جدول الصلاة خلص، الأوقات تقريبية. اضغط لتحط الجديد." else "جدول الصلاة بيخلص بعد $left أيام. اضغط لتحط الشهر الجاي.",
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = nav.prayers).padding(10.dp),
-                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Brand.star.copy(alpha = 0.3f).compositeOver(MaterialTheme.colorScheme.surface))
+                        .clickable(onClick = nav.prayers).padding(12.dp),
+                    style = MaterialTheme.typography.bodyLarge)
             }
         }
         item { UndoRow(s, nav) }
@@ -821,12 +864,12 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             if (openOnes.isEmpty()) item { Muted("ما ضل مهام مفتوحة اليوم ✓") }
             items(openOnes, key = { "a-" + it.id }) { t ->
                 SwipeRow(start = if (!t.running) ({ start(t) }) else null, defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction) {
-                    TaskRow(t, todays, s.now, s = s, status = statusColor(t, false), hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
+                    TaskRow(t, todays, s.now, s = s, status = statusColor(t, false), hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }, onDone = { nav.finish(t) }) { nav.taskMenu(t) }
                 }
             }
             if (doneOnes.isNotEmpty()) {
                 item { Text("خلصانة · ${doneOnes.size}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) }
-                items(doneOnes, key = { "ad-" + it.id }) { t -> TaskRow(t, todays, s.now, s = s, status = statusColor(t, false), hideTime = true, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) } }
+                items(doneOnes, key = { "ad-" + it.id }) { t -> TaskRow(t, todays, s.now, s = s, status = statusColor(t, false), hideTime = true, onDoubleClick = { nav.details(t) }, onDone = { nav.finish(t) }) { nav.taskMenu(t) } }
             }
         }
         if (!TodayView.all) for (p in periods) {
@@ -849,8 +892,8 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
                         if (t.open) SwipeRow(
                             start = if (!t.running) ({ start(t) }) else null,
                             defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction,
-                        ) { TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) } }
-                        else TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
+                        ) { TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }, onDone = { nav.finish(t) }) { nav.taskMenu(t) } }
+                        else TaskRow(t, todays, s.now, s = s, status = color, highlight = true, hideTime = !t.pinned, onDoubleClick = { nav.details(t) }, onDone = { nav.finish(t) }) { nav.taskMenu(t) }
                     }
                 }
             }
@@ -860,7 +903,7 @@ fun PeriodToday(s: Snapshot, repo: Repository, nav: Nav, add: (String) -> Unit, 
             item { Text("ما إلها فترة لسا · ${loose.size}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp)) }
             items(loose, key = { "t-" + it.id }) { t ->
                 SwipeRow(start = { start(t) }, defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction) {
-                    TaskRow(t, todays, s.now, extra = whyNoRoom(t, loads.values.toList(), minute, s.now), s = s, hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) }
+                    TaskRow(t, todays, s.now, extra = whyNoRoom(t, loads.values.toList(), minute, s.now), s = s, hideTime = true, onLongClick = { nav.quickMove(t) }, onDoubleClick = { nav.details(t) }, onDone = { nav.finish(t) }) { nav.taskMenu(t) }
                 }
             }
         }
@@ -890,35 +933,28 @@ fun NextPanel(s: Snapshot, nav: Nav, todays: List<Task>, periods: List<Period>, 
     val lastEnd = todays.filter { it.done && it.finishedAt > 0 }.maxOfOrNull { it.finishedAt }
     val idle = lastEnd?.let { ((s.now - it) / 60_000).toInt() }
     Panel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("فترة ${period?.name ?: ""}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-            AppleButton(s, nav.pomo)
-        }
         if (next != null) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                TaskBadge(s.settings.icons[seriesOf(next)], tagColor(colorIndexOf(next, s.settings)), 30.dp)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DomainTile(domainOf(next, s.settings), 64.dp, s.settings.icons[seriesOf(next)]?.takeIf { s.settings.nameStyle != "name" })
                 Column(Modifier.weight(1f)) {
-                    Text(next.title, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("هلأ · ${period?.name ?: ""}", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurfaceVariant else Brand.lanternText)
+                    Text(next.title, fontFamily = DisplayFont, fontSize = 23.sp, lineHeight = 30.sp, fontWeight = FontWeight.Bold)
                     Muted(durLabel(next.minutes) + if (here.size > 1) " · وباقي ${here.size - 1} بهاي الفترة" else "")
                 }
+                AppleButton(s, nav.pomo)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action("ابدأ", { start(next) }, Modifier.weight(1f))
-                Secondary("اختار غيرها", showPeriod, Modifier.weight(1f))
+                Action("ابدأ", { start(next) }, Modifier.weight(1.4f))
+                Secondary("مش هلأ", showPeriod, Modifier.weight(1f))
             }
         } else {
-            Text("خلصت مهام هاي الفترة ✓", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Status.done)
             val after = periods.getOrNull(periods.indexOfFirst { it.key == nowKey } + 1)
-            if (after != null) {
-                val n = todays.count { it.open && it.period == after.key }
-                Muted("الجاية: ${after.name} الساعة ${fmt12(after.start)}" + if (n > 0) " · $n مهام" else "")
-            }
+            val n = after?.let { a -> todays.count { it.open && it.period == a.key } } ?: 0
+            NourNote(NourMood.Happy, "خلصت مهام ${period?.name ?: "هاي الفترة"} ✓",
+                after?.let { "الجاية: ${it.name} الساعة ${fmt12(it.start)}" + if (n > 0) " · $n مهام" else "" }, 96.dp)
         }
-        if (idle != null && next != null) Text(
-            "صارلك ${durLabel(idle.coerceAtLeast(1))} من آخر مهمة خلّصتها",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (idle >= 15) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (idle != null && next != null && idle >= 1) Muted("صارلك ${durLabel(idle.coerceAtLeast(1))} من آخر مهمة خلّصتها")
     }
 }
 
@@ -928,24 +964,31 @@ fun PeriodTitle(p: Period, list: List<Task>, over: Boolean, now: Boolean, open: 
                 add: (() -> Unit)? = null) {
     val done = list.count { it.done }
     val accent = periodAccent(p.key)
-    Card(
-        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = click, onLongClick = longClick),
-        colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = if (now) 0.26f else if (over) 0.08f else 0.15f).compositeOver(MaterialTheme.colorScheme.surface)),
+    val allDone = list.isNotEmpty() && done == list.size
+    // The part of the day you are in gets a warm card; the others are plain lines, so the eye lands on now.
+    val bg = when {
+        now -> accent.copy(alpha = 0.16f).compositeOver(MaterialTheme.colorScheme.surface)
+        open -> MaterialTheme.colorScheme.surface
+        else -> Color.Transparent
+    }
+    val arrow by androidx.compose.animation.core.animateFloatAsState(if (open) 180f else 0f, androidx.compose.animation.core.tween(if (calmMotion()) 0 else 200), label = "arrow")
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(bg).combinedClickable(onClick = click, onLongClick = longClick)
+            .padding(horizontal = 12.dp, vertical = if (now) 12.dp else 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(7.dp).fillMaxHeight().background(accent))
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp).weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(p.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = if (over) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
-            Text(fmt12(p.start), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (now) Text("الآن", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Box(Modifier.weight(1f))
-            if (list.isNotEmpty()) Text("$done/${list.size}", style = MaterialTheme.typography.bodyMedium,
-                color = if (done == list.size) Status.done else MaterialTheme.colorScheme.onSurfaceVariant)
-            if (add != null) Text("+", Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = add).padding(horizontal = 12.dp, vertical = 2.dp),
-                fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            Text(if (open) "▲" else "▼", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        }
+        Box(Modifier.size(if (now) 14.dp else 12.dp).clip(RoundedCornerShape(7.dp)).background(accent))
+        Text(p.name, fontFamily = if (now) DisplayFont else BodyFont, fontSize = if (now) 21.sp else 17.sp, fontWeight = FontWeight.Bold,
+            color = if (over && !now) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+        Text(fmt12(p.start) + if (now) " · الآن" else "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(Modifier.weight(1f))
+        if (list.isNotEmpty()) Text(if (allDone) "${list.size}/${list.size} ✓" else "$done/${list.size}", style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (allDone) FontWeight.Bold else FontWeight.Normal, color = if (allDone) doneColor() else MaterialTheme.colorScheme.onSurfaceVariant)
+        if (add != null) Box(
+            Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = add),
+            contentAlignment = Alignment.Center,
+        ) { Text("+", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurface else accent) }
+        Text("▾", Modifier.graphicsLayer { rotationZ = arrow }, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 18.sp)
     }
 }
 
@@ -987,7 +1030,7 @@ fun HoursToday(s: Snapshot, repo: Repository, nav: Nav, add: () -> Unit, askClos
                 if (t.open) SwipeRow(
                     start = if (!t.running) ({ nav.start(t, false); scope.launch { delay(150); listState.animateScrollToItem(0) } }) else null,
                     defer = { nav.act { repo.deferTask(t.id, s.settings.swipeAction) } }, deferMode = s.settings.swipeAction,
-                ) { TaskRow(t, todays, s.now, s = s, onDoubleClick = { nav.details(t) }) { nav.taskMenu(t) } }
+                ) { TaskRow(t, todays, s.now, s = s, onDoubleClick = { nav.details(t) }, onDone = { nav.finish(t) }) { nav.taskMenu(t) } }
                 else TaskRow(t, todays, s.now, s = s, status = statusColor(t, false)) { nav.taskMenu(t) }
             }
             item {
@@ -1021,14 +1064,16 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
     Panel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                when { t.running -> "جارية الآن"; upcoming -> "التالية"; t.spent > 0 -> "متوقفة مؤقتاً"; else -> "الآن" },
-                Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
+                when { t.running -> "شغّالة هلأ"; upcoming -> "التالية"; t.spent > 0 -> "متوقفة مؤقتاً"; else -> "هلأ" },
+                Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurfaceVariant else Brand.lanternText,
             )
             AppleButton(s, nav.pomo)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TaskBadge(s.settings.icons[seriesOf(t)], tagColor(colorIndexOf(t, s.settings)), 32.dp)
-            Text(t.title, fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { nav.openTask(t) })
+            DomainTile(domainOf(t, s.settings), 56.dp, s.settings.icons[seriesOf(t)]?.takeIf { s.settings.nameStyle != "name" })
+            Text(t.title, fontFamily = DisplayFont, fontSize = 25.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).clickable { nav.openTask(t) })
+            if (t.running) Nour(NourMood.Awake, size = 52.dp, label = "شغّالة")
         }
         s.plans.firstOrNull { "plan-${it.id}" == t.ruleId && it.kind == "cycle" }?.let { p ->
             PlanMath.stageDetails(p, 0).takeIf { it.isNotBlank() }?.let { Muted(it) }
@@ -1051,9 +1096,9 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
                     // Past the estimate the clock keeps counting what is over it.
                     if (timeUp) (if (over >= 60_000) "+" + timerLabel(over) else "انتهى الوقت") else timerLabel(remaining),
                     fontSize = 52.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
-                    color = if (timeUp) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    color = if (timeUp) ctaColor() else MaterialTheme.colorScheme.onSurface,
                 )
-                LinearProgressIndicator(progress = { (spent.toFloat() / (t.minutes * 60_000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+                LinearProgressIndicator(progress = { (spent.toFloat() / (t.minutes * 60_000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)), color = ctaColor(), trackColor = MaterialTheme.colorScheme.surfaceVariant, drawStopIndicator = {})
             }
         }
         if (timeUp && over >= 60_000) Muted("تجاوزت التقدير (${durLabel(t.minutes)}) بـ${durLabel((over / 60_000).toInt())}. الوقت الحقيقي كله بينحسب.")
@@ -1147,43 +1192,51 @@ fun ReviewControls(t: Task, s: Snapshot, nav: Nav) {
     }
 }
 
-/** One row of a task list: start clock, title, duration circles. */
+/**
+ * One row of a task list: the domain's drawing (or the icon chosen for it), the name and a short line, and the round
+ * tick at the end. Tap = the task card, long press = move, double tap = details, tick = done.
+ */
 @Composable
 fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snapshot? = null, status: Color? = null, highlight: Boolean = false,
-            hideTime: Boolean = false, onLongClick: (() -> Unit)? = null, onDoubleClick: (() -> Unit)? = null, onClick: () -> Unit) {
+            hideTime: Boolean = false, onLongClick: (() -> Unit)? = null, onDoubleClick: (() -> Unit)? = null, onDone: (() -> Unit)? = null, onClick: () -> Unit) {
     val routine = s != null && isRoutine(t, s.ruleMap, s.settings)
     val tag = s?.let { tagColor(colorIndexOf(t, it.settings)) }
     val look = s?.settings?.icons?.get(seriesOf(t))
     val style = s?.settings?.nameStyle ?: "name"
-    val showBadge = look != null && style != "name"
-    val showName = !showBadge || style != "icon"
+    val showName = look == null || style != "icon"
+    val domain = s?.let { domainOf(t, it.settings) } ?: domainOf(t.category, null)
+    val finished = !t.open
+    val haptic = LocalHapticFeedback.current
+    val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Card(
-        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick, onDoubleClick = onDoubleClick),
-        border = status?.let { BorderStroke(2.dp, it) },
+        modifier = Modifier.fillMaxWidth().pressScale(press)
+            .combinedClickable(interactionSource = press, indication = androidx.compose.foundation.LocalIndication.current, onClick = onClick, onLongClick = onLongClick, onDoubleClick = onDoubleClick),
+        shape = RoundedCornerShape(18.dp),
+        border = if (t.running) BorderStroke(2.dp, ctaColor()) else null,
         colors = CardDefaults.cardColors(containerColor = when {
-            status != null && (t.done || !t.open) -> status.copy(alpha = 0.16f).compositeOver(MaterialTheme.colorScheme.surface)
-            routine -> MaterialTheme.colorScheme.surfaceContainerHigh
+            finished -> MaterialTheme.colorScheme.surface.copy(alpha = 0.7f).compositeOver(MaterialTheme.colorScheme.background)
+            routine -> MaterialTheme.colorScheme.surfaceContainerLow
             else -> MaterialTheme.colorScheme.surface
         }),
     ) {
         Row(Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
-        if (tag != null) Box(Modifier.width(6.dp).fillMaxHeight().background(tag))
-        Row(Modifier.padding(14.dp).weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (tag != null) Box(Modifier.width(5.dp).fillMaxHeight().background(tag))
+        Row(Modifier.padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp).weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (!hideTime) Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                ClockIcon(if (t.planned > 0) Clock.minuteOfDay(t.planned) else null, 30.dp)
-                Text(if (t.planned > 0) fmt12(Clock.minuteOfDay(t.planned)) else "—", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ClockIcon(if (t.planned > 0) Clock.minuteOfDay(t.planned) else null, 26.dp)
+                Text(if (t.planned > 0) fmt12(Clock.minuteOfDay(t.planned)) else "—", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (t.done) Icon(Icons.Filled.CheckCircle, null, tint = MaterialTheme.colorScheme.tertiary)
-                    else if (t.running) Icon(Icons.Filled.PlayCircle, null, tint = MaterialTheme.colorScheme.primary)
-                    else if (t.spent > 0) Icon(Icons.Filled.PauseCircle, null, tint = MaterialTheme.colorScheme.primary)
-                    if (showBadge) TaskBadge(look, tag)
-                    if (showName) Text(t.title, fontSize = 18.sp, fontWeight = FontWeight.Medium)
-                    else if (t.phaseCount > 1 || t.isPlan) Text(t.title.substringAfter(": ", t.title).take(24), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+            DomainTile(domain, 44.dp, look?.takeIf { style != "name" }, done = finished)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                if (t.running) Text("▶ شغّالة هلأ", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (LocalThemeChoice.current.mono) MaterialTheme.colorScheme.onSurface else Brand.lanternText)
+                else if (t.open && t.spent > 0) Text("⏸ متوقفة", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (showName) Text(t.title, fontSize = 16.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 23.sp,
+                    color = if (finished) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    textDecoration = if (t.done) androidx.compose.ui.text.style.TextDecoration.LineThrough else null)
+                else if (t.phaseCount > 1 || t.isPlan) Text(t.title.substringAfter(": ", t.title).take(24), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val parent = t.parallelTo?.let { id -> all.firstOrNull { it.id == id } }
                 val notes = buildList {
+                    add(durLabel(t.minutes))
                     if (routine) add("روتين")
                     if (t.pinned && t.open) add("موعد ثابت")
                     if (parent != null && t.open) add("بالتوازي مع ${parent.baseTitle}")
@@ -1196,13 +1249,11 @@ fun TaskRow(t: Task, all: List<Task>, now: Long, extra: String? = null, s: Snaps
                     }
                     if (extra != null) add(extra)
                 }
-                if (notes.isNotEmpty()) Muted(notes.joinToString(" · "))
+                Text(notes.joinToString(" · "), fontSize = 13.sp, lineHeight = 19.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (t.details.isNotBlank()) Text(t.details, fontSize = 13.sp, maxLines = 2, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                DurationIcon(t.minutes, 20.dp)
-                Text(durLabel(t.minutes), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            if (t.state == "skipped") Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) { Text("–", fontSize = 22.sp, color = MaterialTheme.colorScheme.outline) }
+            else if (t.done || onDone != null) DoneCircle(t.done, "علّم «${t.baseTitle}» منجزة", onDone?.let { f -> { haptic.performHapticFeedback(HapticFeedbackType.LongPress); f() } })
         }
         }
     }
@@ -1340,15 +1391,19 @@ private fun sha256(t: String) = java.security.MessageDigest.getInstance("SHA-256
 fun LockScreen(open: () -> Unit) {
     var text by remember { mutableStateOf("") }
     var wrong by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(24.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("كلمة المرور", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            OutlinedTextField(value = text, onValueChange = { text = it; wrong = false }, singleLine = true,
+    Box(Modifier.fillMaxSize().background(headerColor()).padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).background(MaterialTheme.colorScheme.surface).padding(22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Nour(if (wrong) NourMood.Dim else NourMood.Awake, size = 120.dp, label = "نور")
+            Text("أهلا فيك", style = MaterialTheme.typography.headlineSmall)
+            OutlinedTextField(value = text, onValueChange = { text = it; wrong = false }, singleLine = true, label = { Text("كلمة المرور") },
                 visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), isError = wrong,
-                modifier = Modifier.fillMaxWidth())
+                shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
             if (wrong) Text("كلمة المرور غلط", color = MaterialTheme.colorScheme.error)
-            Button(onClick = { if (sha256(text.trim()) == LOCK_HASH) open() else wrong = true }, modifier = Modifier.fillMaxWidth()) { Text("فتح") }
+            Action("فتح", { if (sha256(text.trim()) == LOCK_HASH) open() else wrong = true }, Modifier.fillMaxWidth())
         }
     }
 }
@@ -1434,11 +1489,8 @@ fun ViewSwitch() {
     val context = LocalContext.current
     LaunchedEffect(Unit) { TodayView.load(context) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(selected = !TodayView.all, onClick = { TodayView.set(context, false) }, label = { Text("بالمواقيت", fontSize = 15.sp) })
-        FilterChip(selected = TodayView.all, onClick = { TodayView.set(context, true) }, label = { Text("كل المهام", fontSize = 15.sp) })
-        Box(Modifier.weight(1f))
-        Text("بدون روتين", style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = HideRoutine.on, onCheckedChange = { HideRoutine.on = it })
+        Segmented(listOf("بالمواقيت", "كل المهام"), if (TodayView.all) 1 else 0, Modifier.weight(1f)) { TodayView.set(context, it == 1) }
+        FilterChip(selected = HideRoutine.on, onClick = { HideRoutine.on = !HideRoutine.on }, label = { Text("بلا روتين", fontSize = 14.sp) })
     }
 }
 

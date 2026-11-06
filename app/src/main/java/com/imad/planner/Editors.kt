@@ -575,7 +575,7 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
 // ---------------- Settings ----------------
 
 @Composable
-fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit, openGroups: () -> Unit, openPrayers: () -> Unit = {}, test: () -> Unit) {
+fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit, openGroups: () -> Unit, openPrayers: () -> Unit = {}, xpOn: Boolean = true, test: () -> Unit) {
     val context = LocalContext.current
     var soundName by remember { mutableStateOf(soundTitle(context)) }
     val soundPicker = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { res ->
@@ -720,7 +720,11 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
             FilterChip(selected = !theme.mono, onClick = { theme.set(false) }, label = { Text("ملوّن") })
             FilterChip(selected = theme.mono, onClick = { theme.set(true) }, label = { Text("أبيض وأسود") })
         }
-        Muted("الإصدار 0.29")
+        SwitchRow("حركة أقل", theme.calm) { theme.setCalm(it) }
+        Muted("بتوقف الاحتفالات والحركات وبيضل كل إشي بمكانه. بتشتغل لحالها كمان إذا الجوال موقف الحركة.")
+        SwitchRow("النقاط والمستويات", xpOn) { set("xp", if (it) "1" else "0") }
+        Muted("النقاط بتنحسب من سجلّك الحقيقي: دقائق المؤقت والمهام المنجزة وأهدافك. إطفاؤها بيخفيها وما بيمسح إشي.")
+        Muted("الإصدار 0.30")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }

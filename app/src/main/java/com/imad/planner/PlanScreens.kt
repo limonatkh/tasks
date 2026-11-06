@@ -118,11 +118,7 @@ fun habitsIn(cat: String, s: Snapshot): List<Rule> =
 fun PlanningTab(s: Snapshot, nav: Nav, tomorrow: @Composable () -> Unit) {
     var mode by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            listOf("بكرا", "الأسبوع", "الشهر").forEachIndexed { i, label ->
-                FilterChip(selected = mode == i, onClick = { mode = i }, label = { Text(label, fontSize = 16.sp) })
-            }
-        }
+        Segmented(listOf("بكرا", "الأسبوع", "الشهر"), mode, Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) { mode = it }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             when (mode) {
                 0 -> Secondary("رتّب بكرا بالسحب", { nav.dayPlan(s.today.plusDays(1)) }, Modifier.weight(1f))
@@ -142,14 +138,20 @@ fun PlanningTab(s: Snapshot, nav: Nav, tomorrow: @Composable () -> Unit) {
 
 /** Where each goal is going: the year plan, sport numbers, new goals. */
 @Composable
-fun GoalsTab(s: Snapshot, nav: Nav) {
+fun GoalsTab(s: Snapshot, nav: Nav, sum: Progress.Summary? = null, openProgress: () -> Unit = {}) {
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Action("+ هدف", nav.newGoal, Modifier.weight(1f))
-            Secondary("الرياضة", nav.sports, Modifier.weight(1f))
-            Secondary("المجموعات", nav.groups, Modifier.weight(1f))
+        Box(Modifier.weight(1f)) {
+            YearView(s, nav, top = {
+                if (sum != null) progressItems(sum, openProgress)
+                item(key = "goal-actions") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Action("+ هدف", nav.newGoal, Modifier.weight(1f))
+                        Secondary("الرياضة", nav.sports, Modifier.weight(1f))
+                        Secondary("المجموعات", nav.groups, Modifier.weight(1f))
+                    }
+                }
+            })
         }
-        Box(Modifier.weight(1f)) { YearView(s, nav) }
     }
 }
 
@@ -398,10 +400,11 @@ private fun MonthTargetCard(y: YearTarget, ym: YearMonth, s: Snapshot, nav: Nav,
 // ---------------- Year ----------------
 
 @Composable
-fun YearView(s: Snapshot, nav: Nav) {
+fun YearView(s: Snapshot, nav: Nav, top: (androidx.compose.foundation.lazy.LazyListScope.() -> Unit)? = null) {
     val open = remember { mutableStateMapOf<String, Boolean>() }
     val inactiveSport = s.rules.filter { !it.active && it.category == "sport" && Members.goals(it).isNotEmpty() }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        top?.invoke(this)
         item {
             Panel {
                 Text("الخطة السنوية", style = MaterialTheme.typography.titleMedium)
