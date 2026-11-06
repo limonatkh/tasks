@@ -279,6 +279,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     var addMenu by remember { mutableStateOf(false) }
     var reportFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     var noteFor by remember { mutableStateOf<Task?>(null) }
+    var fixFor by remember { mutableStateOf<Task?>(null) }
     var postponeFor by remember { mutableStateOf<Task?>(null) }
     var groupsOpen by remember { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<Task?>(null) }
@@ -568,6 +569,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             move = { key -> act { repo.moveToGroup(y.goal?.id, y.plan?.id, null, key) } })
     }
     reportFor?.let { (series, title) -> ReportSheet(series, title, snap, close = { reportFor = null }, note = { text -> act { repo.store.task(series)?.let { repo.addNote(it.id, text) } ?: snap.tasks.lastOrNull { seriesOf(it) == series }?.let { repo.addNote(it.id, text) } } }) }
+    fixFor?.let { t -> FixTimeDialog(t, Maths.spent(t, System.currentTimeMillis()), close = { fixFor = null }) { m -> act { repo.setSpent(t.id, m); fixFor = null; snackbar.showSnackbar("انحفظ الوقت: ${durLabel(m)}") } } }
     noteFor?.let { t -> TextDialog("ملاحظة على «${t.baseTitle}»", "ليش تأخرت أو ما خلصتها؟", close = { noteFor = null }) { text -> act { repo.addNote(t.id, text); noteFor = null } } }
     postponeFor?.let { t -> PostponeChoice(t, recurring = t.ruleId != null, close = { postponeFor = null }) { text, mode -> act { repo.postpone(t.id, text, mode); postponeFor = null } } }
     if (prayerOpen) PrayerSheet(snap.settings, today, close = { prayerOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } })
@@ -648,6 +650,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             place = if (prayerDay) ({ placeFor = t }) else null,
             quran = { quranFor = t },
             report = { reportFor = seriesOf(t) to t.baseTitle },
+            fixTime = { fixFor = t },
             note = { noteFor = t },
             close = { act { repo.deferTask(t.id, "close") } },
             delete = { act { repo.delete(t.id) } },
@@ -656,6 +659,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
     if (settingsOpen) SettingsDialog(snap.settings, close = { settingsOpen = false }, set = { k, v -> act { repo.setSetting(k, v) } }, openGroups = { groupsOpen = true }, openPrayers = { prayerOpen = true },
         test = { Alarms.ring(context, 4999, "تجربة المنبه", "هكذا يرن عند انتهاء مهمة وبدء التالية", null, false) })
     if (closeDay) CloseDayDialog(snap.tasks.filter { it.day == today.toString() && it.state != "skipped" }, now, close = { closeDay = false },
+        tomorrow = snap.tasks.filter { it.day == today.plusDays(1).toString() },
         finish = { mode -> act { val n = repo.closeDay(mode); closeDay = false; snackbar.showSnackbar((if (mode == "carry") "ترحّلت $n مهام لليوم اللي بعده" else "انسكّر اليوم") + if (repo.lastClosed != Clock.today()) " (يوم ${repo.lastClosed?.let { dayLabel(it) }})" else "") } })
     restoreText?.let { text ->
         RestorePreview(text, close = { restoreText = null }) {
@@ -954,6 +958,7 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
     val spent = Maths.spent(t, now)
     val remaining = t.minutes * 60_000L - spent
     val timeUp = remaining <= 0
+    val over = Maths.over(t, now)
     val parallel = todays.filter { it.parallelTo == t.id && it.open }
     val upcoming = !t.running && t.spent == 0L && t.doneUnits == 0 && t.planned > now + 60_000
     val isReview = s.plans.any { it.kind == "review" && t.ruleId == "plan-${it.id}" }
@@ -989,13 +994,15 @@ fun CurrentPanel(t: Task, todays: List<Task>, s: Snapshot, repo: Repository, nav
                 AnalogTimer(spent, t.minutes * 60_000L)
             } else {
                 Text(
-                    if (timeUp) "انتهى الوقت" else timerLabel(remaining),
+                    // Past the estimate the clock keeps counting what is over it.
+                    if (timeUp) (if (over >= 60_000) "+" + timerLabel(over) else "انتهى الوقت") else timerLabel(remaining),
                     fontSize = 52.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
                     color = if (timeUp) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                 )
                 LinearProgressIndicator(progress = { (spent.toFloat() / (t.minutes * 60_000f)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
             }
         }
+        if (timeUp && over >= 60_000) Muted("تجاوزت التقدير (${durLabel(t.minutes)}) بـ${durLabel((over / 60_000).toInt())}. الوقت الحقيقي كله بينحسب.")
         if (t.sets > 1 && t.restSec > 0 && (t.running || t.spent > 0)) Text(trainingPhase(t, spent, members), style = MaterialTheme.typography.bodyLarge)
         if (isReview) ReviewControls(t, s, nav)
         if (parallel.isNotEmpty()) {
@@ -1276,4 +1283,24 @@ fun LockScreen(open: () -> Unit) {
             Button(onClick = { if (sha256(text.trim()) == LOCK_HASH) open() else wrong = true }, modifier = Modifier.fillMaxWidth()) { Text("فتح") }
         }
     }
+}
+
+
+/** The real time worked, set by hand (estimate stays as it was). */
+@Composable
+fun FixTimeDialog(t: Task, spentMs: Long, close: () -> Unit, save: (Int) -> Unit) {
+    var text by remember { mutableStateOf(((spentMs + 30_000) / 60_000).toString()) }
+    val m = digits(text).toIntOrNull()
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = close,
+        title = { Text("تصحيح وقت «${t.baseTitle}»") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Muted("قديش اشتغلت عليها فعلاً؟ التقدير (${durLabel(t.minutes)}) بيضل زي ما هو.")
+                Field(text, "الوقت الحقيقي بالدقائق", { text = it }, numeric = true)
+            }
+        },
+        confirmButton = { TextButton(onClick = { m?.let(save) }, enabled = m != null && m in 0..1440) { Text("حفظ") } },
+        dismissButton = { TextButton(onClick = close) { Text("إلغاء") } },
+    )
 }

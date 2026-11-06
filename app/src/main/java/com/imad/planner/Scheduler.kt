@@ -38,6 +38,8 @@ data class Item(
     val earliest: Int? = null,
     /** May be placed inside the work hours block. */
     val atWork: Boolean = false,
+    /** Only inside its window ("this period only"): when the window is full it waits unplaced instead of moving out. */
+    val strict: Boolean = false,
 ) {
     val isTraining get() = sets > 1 && restSec > 0
 }
@@ -153,28 +155,41 @@ object Scheduler {
         val candidates = items.filter {
             it.interruptible && !it.isTraining && it.fixedStart == null && it.inProgressStart == null && it.sport == 0
         }.sortedWith(compareByDescending<Item> { it.priority }.thenBy { it.order })
-        val absorbed = mutableMapOf<String, String>()
+        // Each light task takes its own seconds of rest, one after the other (never the same seconds as another),
+        // and only in a session that sits inside the times the task is allowed.
+        val absorbed = mutableMapOf<String, Pair<String, Int>>() // task -> session, offset (sec) from the session start
         for (s in sessions) {
-            var capacity = usableRestSec(s)
+            val sp = first.placed[s.id] ?: continue
+            val wins = restWindows(0, s.minutes, s.sets, s.workSec, s.restSec).filter { it.endSec - it.startSec >= MIN_FILL_GAP_MIN * 60 }
+            var wi = 0; var used = 0
             for (c in candidates) {
                 if (c.id in absorbed) continue
-                val need = c.minutes * 60
-                if (need <= capacity) {
-                    absorbed[c.id] = s.id
-                    capacity -= need
+                val from = listOfNotNull(c.earliest, if (c.strict) c.windowStart else null).maxOrNull()
+                val to = listOfNotNull(c.hardEnd, if (c.strict) c.windowEnd else null).minOrNull()
+                if (from != null && sp.start < from) continue
+                if (to != null && sp.end > to) continue
+                var need = c.minutes * 60; var i = wi; var u = used; var at: Int? = null
+                while (need > 0 && i < wins.size) {
+                    val len = wins[i].endSec - wins[i].startSec
+                    val free = len - u
+                    if (free <= 0) { i++; u = 0; continue }
+                    if (at == null) at = wins[i].startSec + u
+                    val take = minOf(free, need)
+                    need -= take; u += take
+                    if (u >= len) { i++; u = 0 }
                 }
+                if (need > 0 || at == null) continue
+                absorbed[c.id] = s.id to at
+                wi = i; used = u
             }
         }
         if (absorbed.isEmpty()) return first
         val second = place(items.filter { it.id !in absorbed }, cfg, now)
         val placed = second.placed.toMutableMap()
-        for ((cid, sid) in absorbed) {
+        for ((cid, v) in absorbed) {
+            val (sid, offset) = v
             val sp = placed[sid] ?: continue
-            val sItem = items.first { it.id == sid }
-            val w = restWindows(sp.start, sItem.minutes, sItem.sets, sItem.workSec, sItem.restSec)
-                .firstOrNull { it.endSec - it.startSec >= MIN_FILL_GAP_MIN * 60 }
-            val start = w?.startSec?.div(60) ?: sp.start
-            placed[cid] = Placed(cid, start, sp.end, parallelTo = sid, overflow = sp.overflow)
+            placed[cid] = Placed(cid, sp.start + offset / 60, sp.end, parallelTo = sid, overflow = sp.overflow)
         }
         return DayPlan(placed, second.overflow, second.conflicts, second.capped)
     }
@@ -207,9 +222,10 @@ object Scheduler {
         // 3. Flexible tasks, in the order of where they belong in the day.
         val floor = maxOf(cfg.dayStart, now)
         val flexible = items.filter { it.inProgressStart == null && it.fixedStart == null }
+            // The more important ones get their place first; among equals, the day's order (preferred time) decides.
             .sortedWith(
-                compareBy<Item> { it.preferred ?: it.windowStart ?: it.earliest ?: cfg.dayStart }
-                    .thenByDescending { it.priority }
+                compareByDescending<Item> { it.priority }
+                    .thenBy { it.preferred ?: it.windowStart ?: it.earliest ?: cfg.dayStart }
                     .thenBy { it.order }
             )
         val blockers = cfg.blocks.mapIndexed { i, (a, b) -> Placed("__block$i", a, b) }
@@ -229,7 +245,8 @@ object Scheduler {
             if (it.preferred != null) start = findSlot(around, maxOf(lo, it.preferred), it.minutes, limit, gapFor)
             if (start == null && it.windowStart != null)
                 start = findSlot(around, maxOf(lo, it.windowStart), it.minutes, minOf(limit, it.windowEnd ?: limit), gapFor)
-            if (start == null) start = findSlot(around, lo, it.minutes, limit, gapFor)
+            // "This period only": it does not slip into another part of the day.
+            if (start == null && !(it.strict && it.windowStart != null)) start = findSlot(around, lo, it.minutes, limit, gapFor)
             if (start == null) {
                 overflow += it.id
                 placed[it.id] = Placed(it.id, lo, lo + it.minutes, overflow = true)
@@ -327,6 +344,16 @@ object Scheduler {
     fun weekdayBit(d: DayOfWeek) = 1 shl (d.value - 1)
 
     fun intervalDays(everyHours: Int) = ceil(everyHours.coerceAtLeast(1) / 24.0).toInt().coerceAtLeast(1)
+
+    /** Real hours: the moment the next session may start, [everyHours] after the last one ended (null if never done). */
+    fun readyAt(everyHours: Int, lastEnd: Long?): Long? = lastEnd?.takeIf { it > 0 }?.plus(everyHours.coerceAtLeast(1) * 3_600_000L)
+
+    /**
+     * Real hours: is a session due on [day]? Only if the wait is over in time for a whole session before the day
+     * ends ([dayEndMs]), and not on a day that already had one.
+     */
+    fun dueByHours(readyAt: Long, minutes: Int, dayEndMs: Long, lastDone: LocalDate?, day: LocalDate): Boolean =
+        (lastDone == null || day.isAfter(lastDone)) && readyAt + minutes * 60_000L <= dayEndMs
 
     /**
      * Next day the rule is due on or after [from].

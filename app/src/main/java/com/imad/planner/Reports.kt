@@ -77,6 +77,7 @@ class TaskOps(
     val quran: (() -> Unit)? = null,
     val report: (() -> Unit)? = null,
     val note: (() -> Unit)? = null,
+    val fixTime: (() -> Unit)? = null,
     val close: (() -> Unit)? = null,
     val delete: (() -> Unit)? = null,
 )
@@ -112,6 +113,7 @@ fun TaskMenu(t: Task, close: () -> Unit, ops: TaskOps, yt: YtLink? = null) {
             ops.youtube?.let { FilterChip(false, go(it), label = { Text("قائمة يوتيوب") }) }
             ops.quran?.let { FilterChip(false, go(it), label = { Text("ورد القرآن") }) }
             ops.note?.let { FilterChip(false, go(it), label = { Text("ملاحظة") }) }
+            ops.fixTime?.let { FilterChip(false, go(it), label = { Text("تصحيح الوقت") }) }
             ops.report?.let { FilterChip(false, go(it), label = { Text("التقرير") }) }
             ops.delete?.let { FilterChip(false, { confirmDelete = true }, label = { Text("حذف", color = MaterialTheme.colorScheme.error) }) }
         }
@@ -257,11 +259,13 @@ private fun advice(ahead: Boolean, st: SeriesStats?, title: String): String {
     if (ahead) return "متقدم. بتقدر تخفف أو ترفع الهدف."
     if (st == null) return "متأخر عن الخطة."
     val total = st.done + st.missed
+    // Few sessions say little: no firm advice before 5.
+    if (total < 5) return "متأخر عن الخطة، بس في $total جلسات بس، قليلة عشان أحكم ليش."
     val rate = if (total > 0) st.done * 100 / total else 100
-    return when {
+    return "(مبني على $total جلسة) " + when {
         rate < 70 -> "بتفوت ${100 - rate}٪ من جلساتها. جرّب وقت ثاني أو مدة أقصر" + (st.usualStart?.let { "، مثلاً حوالي ${fmt12(it)} لما بتبلّش عادةً" } ?: "") + "."
         (st.avgDelay ?: 0) > 20 -> "بتبلّش متأخر بمعدّل ${durLabel(st.avgDelay!!)}. حط وقتها أبكر أو ثبّت لها موعد."
-        else -> "بتلتزم بالجلسات بس التقدم أبطأ من الخطة. زيد الحصة أو عدد الجلسات."
+        else -> "بتلتزم بالجلسات بس التقدم أبطأ من خطتك. ليش برأيك؟ يا إما الهدف عالي على هالمدة (عدّل الهدف أو أهداف الأشهر)، يا إما الجلسة نفسها بدها تتغير، يا إما ضيف جلسة. للرياضة: التأخر لحاله مش سبب تزيد التدريب."
     }
 }
 

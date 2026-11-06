@@ -80,6 +80,8 @@ data class Task(
     val period: String = "",
     /** Free text the user writes on the task (double tap). */
     val details: String = "",
+    /** Not before this moment (epoch ms; 0 = no limit), e.g. 48 real hours after the last session. */
+    val notBefore: Long = 0,
 ) {
     val running get() = started > 0
     val done get() = state == "done"
@@ -119,6 +121,8 @@ data class Rule(
     /** JSON list of exercises for grouped training sessions. */
     val members: String = "",
     val atWork: Boolean = false,
+    /** Repeat counted in real hours from when the last session ended (true), or in calendar days (false). */
+    val realHours: Boolean = false,
 )
 
 /** History of a task: started, finished, postponed, moved, notes. */
@@ -215,7 +219,7 @@ interface Store {
     @Query("DELETE FROM goal_logs") suspend fun clearLogs()
 }
 
-@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class, Event::class], version = 5, exportSchema = false)
+@Database(entities = [Task::class, Rule::class, Goal::class, GoalLog::class, Project::class, Meta::class, Event::class], version = 6, exportSchema = false)
 abstract class PlannerDb : RoomDatabase() {
     abstract fun store(): Store
 }
@@ -257,6 +261,13 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
 val MIGRATION_4_5 = object : Migration(4, 5) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE tasks ADD COLUMN details TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE tasks ADD COLUMN notBefore INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE rules ADD COLUMN realHours INTEGER NOT NULL DEFAULT 0")
     }
 }
 
@@ -483,6 +494,7 @@ object Clock {
     val zone: ZoneId get() = ZoneId.systemDefault()
     fun today(): LocalDate = LocalDate.now(zone)
     fun minuteOfDay(ms: Long): Int = Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().let { it.hour * 60 + it.minute }
+    fun dateOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
     fun dayOf(ms: Long): LocalDate = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
     fun epoch(day: LocalDate, minute: Int): Long =
         day.atStartOfDay(zone).plusMinutes(minute.toLong()).toInstant().toEpochMilli()
@@ -490,11 +502,15 @@ object Clock {
 }
 
 object Maths {
+    /** The real time worked on a task. It can pass the estimate (the task's minutes); the estimate stays as it was. */
     fun spent(t: Task, now: Long): Long =
-        (t.spent + if (t.started > 0) (now - t.started).coerceAtLeast(0) else 0L)
-            .coerceIn(0L, t.minutes * 60_000L)
+        (t.spent + if (t.started > 0) (now - t.started).coerceAtLeast(0) else 0L).coerceAtLeast(0L)
 
-    fun remaining(t: Task, now: Long): Long = t.minutes * 60_000L - spent(t, now)
+    /** Time left of the estimate (0 once passed). */
+    fun remaining(t: Task, now: Long): Long = (t.minutes * 60_000L - spent(t, now)).coerceAtLeast(0L)
+
+    /** How far past the estimate the task went (0 when within it). */
+    fun over(t: Task, now: Long): Long = (spent(t, now) - t.minutes * 60_000L).coerceAtLeast(0L)
 
     fun valid(title: String, minutes: Int) = title.trim().isNotEmpty() && minutes in 1..10080
 
@@ -638,7 +654,10 @@ fun itemOf(t: Task, rules: Map<String, Rule>, s: Settings, nowMs: Long?, nowMin:
         }
         else -> w0
     }
-    val e = Windows.phaseEarliest(t.phase, t.phaseCount, s.shape)
+    val e0 = Windows.phaseEarliest(t.phase, t.phaseCount, s.shape)
+    // A task that must wait (real hours of rest) starts no earlier than that moment on its day.
+    val nb = if (t.notBefore > 0 && Clock.dateOf(t.notBefore) == day) Clock.minuteOfDay(t.notBefore) else null
+    val e = listOfNotNull(e0, nb).maxOrNull()
     return Item(
         id = t.id, minutes = t.minutes,
         fixedStart = if (t.pinned && t.planned > 0 && !inProgress) Clock.minuteOfDay(t.planned) else null,
@@ -653,7 +672,7 @@ fun itemOf(t: Task, rules: Map<String, Rule>, s: Settings, nowMs: Long?, nowMin:
         remaining = if (inProgress) ((Maths.remaining(t, nowMs!!) + 59_999) / 60_000).toInt() else null,
         windowStart = if (e != null) maxOf(w.start, e) else w.start,
         windowEnd = if (e != null && e >= w.end) s.dayEnd else w.end,
-        hardEnd = w.hardEnd, sport = t.sport, earliest = e,
+        hardEnd = w.hardEnd, sport = t.sport, earliest = e, strict = place?.startsWith("p:") == true,
         atWork = t.atWork || s.group(t.category)?.atWork == true,
     )
 }
@@ -661,7 +680,7 @@ fun itemOf(t: Task, rules: Map<String, Rule>, s: Settings, nowMs: Long?, nowMin:
 // ---------------- Repository ----------------
 
 class Repository(private val context: Context) {
-    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
+    val db: PlannerDb = Room.databaseBuilder(context, PlannerDb::class.java, "planner-v2.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
     val store: Store = db.store()
     private val lock = Mutex()
 
@@ -987,13 +1006,18 @@ class Repository(private val context: Context) {
             if (all.any { it.ruleId == r.id && it.day == ds }) continue
             val instLast = all.filter { it.ruleId == r.id && it.state != "skipped" && it.day < ds && (it.done || it.day >= ts) }.maxOfOrNull { it.day }
             val last = listOfNotNull(r.lastDoneDay, instLast).maxOrNull()?.let(LocalDate::parse)
-            if (only == null && !Scheduler.isDue(r.everyHours, r.weekdays, LocalDate.parse(r.anchorDay), last, day)) continue
+            // Real hours: due once [everyHours] have passed since the last session really ended (it may be later that day).
+            val readyAt = if (r.realHours && r.weekdays == 0) Scheduler.readyAt(r.everyHours, all.filter { it.ruleId == r.id && it.done }.maxOfOrNull { it.finishedAt }) else null
+            val due = if (readyAt != null) Scheduler.dueByHours(readyAt, r.minutes, Clock.epoch(day, settingsLocked().dayEnd), last, day)
+                else Scheduler.isDue(r.everyHours, r.weekdays, LocalDate.parse(r.anchorDay), last, day)
+            if (only == null && !due) continue
             if (day == today) all.filter { it.ruleId == r.id && it.open && it.day < ds && !it.running }
                 .forEach { store.put(it.copy(state = "skipped")); log(it, "missed") }
             val plan = if (r.id.startsWith("plan-")) plans.firstOrNull { "plan-${it.id}" == r.id } else null
             val simPlan = plan?.let { PlanMath.project(it, ChronoUnit.DAYS.between(today, day).toInt().coerceAtLeast(0), mem, today) }
             if (r.id.startsWith("plan-") && simPlan == null) continue
             val inst = buildInstances(r, day, simPlan, mem, simPlan?.let { monthTargetLocked(it, day) })
+                .map { if (readyAt != null && readyAt > Clock.epoch(day, 0)) it.copy(notBefore = readyAt) else it }
             if (inst.isEmpty()) continue
             store.putAll(inst); created += inst
         }
@@ -1104,11 +1128,15 @@ class Repository(private val context: Context) {
                     val week = all[Targets.weekKey(start)]?.get(sr)
                     val text = dayTargets[sr]?.text?.takeIf { it.isNotBlank() }
                     val rule = store.rule(sr)
+                    // Real hours of rest: a session on the day the wait ends starts no earlier than that moment.
+                    val readyAt = if (rule?.realHours == true) Scheduler.readyAt(rule.everyHours,
+                        store.allTasks().filter { it.done && (it.ruleId == sr || it.note == "wk:$sr") }.maxOfOrNull { it.finishedAt }) else null
+                    val nb = readyAt?.takeIf { Clock.dateOf(it) == d } ?: 0L
                     repeat(want - have.size) {
                         store.put(Task(title = title + (text?.let { " · $it" } ?: ""), minutes = week?.minutes?.takeIf { it > 0 } ?: rule?.minutes ?: 60,
                             day = ds, category = cat, note = "wk:$sr",
                             kind = rule?.kind ?: "task", sport = rule?.sport ?: 0, sets = rule?.sets ?: 0, workSec = rule?.workSec ?: 0,
-                            restSec = rule?.restSec ?: 0, interruptible = rule?.interruptible ?: false, goalId = rule?.goalId))
+                            restSec = rule?.restSec ?: 0, interruptible = rule?.interruptible ?: false, goalId = rule?.goalId, notBefore = nb))
                     }
                 } else if (have.size > want) {
                     have.filter { it.open && !it.running && it.spent == 0L }.sortedByDescending { it.created }.take(have.size - want).forEach { store.delete(it.id) }
@@ -1788,8 +1816,7 @@ class Repository(private val context: Context) {
     suspend fun save(task: Task, asDefault: Boolean = false) = locked {
         require(Maths.valid(task.title, task.minutes))
         val old = store.task(task.id)
-        val spentNow = old?.let { Maths.spent(it, System.currentTimeMillis()) } ?: task.spent
-        require(task.minutes * 60_000L >= spentNow) { "المدة أقل من الوقت المصروف" }
+        // The estimate can be set below the time already worked: the real time is kept apart from it.
         store.put(task.copy(title = task.title.trim()))
         if (asDefault && task.ruleId != null) {
             store.rule(task.ruleId)?.let { r ->
@@ -1935,6 +1962,15 @@ class Repository(private val context: Context) {
         replanLocked()
     }
 
+    /** Sets the real time worked by hand (a timer left running, or time worked without one). */
+    suspend fun setSpent(id: String, minutes: Int) = locked {
+        val t = store.task(id) ?: return@locked
+        val ms = minutes.coerceIn(0, 24 * 60) * 60_000L
+        store.put(t.copy(spent = ms, started = if (t.running) System.currentTimeMillis() else 0))
+        log(t, "note", "تصحيح الوقت: ${durLabel(minutes)}")
+        replanLocked()
+    }
+
     suspend fun extend(id: String, minutes: Int) = locked {
         val t = store.task(id) ?: return@locked
         store.put(t.copy(minutes = (t.minutes + minutes).coerceAtMost(10080)))
@@ -1953,6 +1989,14 @@ class Repository(private val context: Context) {
         val t = store.task(id) ?: return@locked
         snapshotLocked("تأجيل «${t.baseTitle}»")
         val rule = t.ruleId?.let { store.rule(it) }
+        if (mode == "shift") {
+            // The same as carrying at the end of the day: this one takes tomorrow's place, the series shifts a day.
+            log(t, "note", listOf("تأجيل والسلسلة بتزحزح", reason.trim()).filter { it.isNotBlank() }.joinToString(" · "))
+            val moved = if (LocalDate.parse(t.day).isBefore(Clock.today())) t.copy(day = Clock.today().toString()) else t
+            endTaskLocked(moved, "carry", "")
+            replanLocked()
+            return@locked
+        }
         if (rule != null && mode != "move") {
             postponeRecurringLocked(t, rule, reason.trim(), mode, now)
             replanLocked()
@@ -2277,7 +2321,7 @@ class Repository(private val context: Context) {
                     .put("sets", t.sets).put("workSec", t.workSec).put("restSec", t.restSec).put("created", t.created)
                     .put("finishedAt", t.finishedAt).put("category", t.category).put("sport", t.sport).put("phase", t.phase)
                     .put("phaseCount", t.phaseCount).put("pct", t.pct).put("units", t.units).put("doneUnits", t.doneUnits).put("note", t.note)
-                    .put("atWork", t.atWork).put("preferMin", t.preferMin).put("period", t.period).put("details", t.details)
+                    .put("atWork", t.atWork).put("preferMin", t.preferMin).put("period", t.period).put("details", t.details).put("notBefore", t.notBefore)
             )
         }
         val goals = JSONArray()
@@ -2299,7 +2343,7 @@ class Repository(private val context: Context) {
                     .put("goalId", r.goalId ?: JSONObject.NULL).put("sets", r.sets).put("workSec", r.workSec)
                     .put("restSec", r.restSec).put("active", r.active).put("anchorDay", r.anchorDay)
                     .put("lastDoneDay", r.lastDoneDay ?: JSONObject.NULL).put("source", r.source).put("role", r.role)
-                    .put("category", r.category).put("sport", r.sport).put("phases", r.phases).put("members", r.members).put("atWork", r.atWork)
+                    .put("category", r.category).put("sport", r.sport).put("phases", r.phases).put("members", r.members).put("atWork", r.atWork).put("realHours", r.realHours)
             )
         }
         val logs = JSONArray()
@@ -2344,7 +2388,7 @@ class Repository(private val context: Context) {
                         id = o.getString("id"), title = o.getString("title"), minutes = minutes,
                         planned = o.optLong("planned"), day = o.getString("day"),
                         state = o.optString("state", "planned").let { if (it == "done" || it == "skipped") it else "planned" },
-                        spent = o.optLong("spent").coerceIn(0L, minutes * 60_000L), started = 0,
+                        spent = o.optLong("spent").coerceAtLeast(0L), started = 0,
                         original = o.optLong("original"),
                         pinned = if (schema == 1) o.optLong("planned") > 0 else o.optBoolean("pinned"),
                         priority = o.optInt("priority", 1), interruptible = o.optBoolean("interruptible"),
@@ -2354,7 +2398,7 @@ class Repository(private val context: Context) {
                         finishedAt = o.optLong("finishedAt"), category = o.optString("category", "other"),
                         sport = o.optInt("sport"), phase = o.optInt("phase"), phaseCount = o.optInt("phaseCount", 1),
                         pct = o.optInt("pct", 100), units = o.optInt("units"), doneUnits = o.optInt("doneUnits"), note = o.optString("note"),
-                        atWork = o.optBoolean("atWork"), preferMin = o.optInt("preferMin", -1), period = o.optString("period"), details = o.optString("details"),
+                        atWork = o.optBoolean("atWork"), preferMin = o.optInt("preferMin", -1), period = o.optString("period"), details = o.optString("details"), notBefore = o.optLong("notBefore"),
                     )
                 )
             }
@@ -2390,7 +2434,7 @@ class Repository(private val context: Context) {
                         anchorDay = o.optString("anchorDay", Clock.today().toString()), lastDoneDay = o.str("lastDoneDay"),
                         source = o.optString("source"), role = o.optString("role", "main"),
                         category = o.optString("category", "other"), sport = o.optInt("sport"),
-                        phases = o.optString("phases"), members = o.optString("members"), atWork = o.optBoolean("atWork"),
+                        phases = o.optString("phases"), members = o.optString("members"), atWork = o.optBoolean("atWork"), realHours = o.optBoolean("realHours"),
                     )
                 )
             }

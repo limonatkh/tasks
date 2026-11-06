@@ -202,22 +202,29 @@ fun periodLoads(s: Snapshot, todays: List<Task>): List<PeriodLoad> {
 @Composable
 fun PostponeChoice(t: Task, recurring: Boolean, close: () -> Unit, done: (String, String) -> Unit) {
     var text by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf(if (recurring) "merge" else "move") }
+    // One rule everywhere: the session moves to tomorrow and the series shifts with it, the same as closing the day.
+    var mode by remember { mutableStateOf(if (recurring) "shift" else "move") }
     AlertDialog(
         onDismissRequest = close,
         title = { Text("تأجيل «${t.baseTitle}» لبكرا؟") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (recurring) {
-                    Muted("هاي مهمة متكررة، وإلها جلسة بكرا. شو بدك؟")
+                    Muted("هاي مهمة متكررة. شو بدك؟")
                     listOf(
-                        "merge" to "دمج: جلسة وحدة أطول بكرا",
-                        "keep" to "إبقاء الثنتين: هاي وجلسة بكرا",
-                        "skip" to "تخطّي هاي الجلسة: بكرا جلستها العادية",
+                        "shift" to "لبكرا، والسلسلة بتزحزح يوم (الأساس)",
+                        "merge" to "دمج مع جلسة بكرا: جلسة وحدة أطول",
+                        "keep" to "إبقاء الثنتين بكرا",
+                        "skip" to "تخطّي هاي الجلسة",
                     ).forEach { (k, label) ->
                         FilterChip(selected = mode == k, onClick = { mode = k }, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
                     }
-                    Muted("بكل الحالات مواعيد السلسلة ما بتتغير. ترحيل آخر اليوم الإجباري بيضل يزحزح السلسلة زي قبل.")
+                    Muted(when (mode) {
+                        "shift" -> "اللي ما انعمل بيصير جلسة بكرا (مثلاً نفس الصفحات)، وجلسة بكرا الأصلية بتتأخر يوم. هيك بالضبط بيعمل إغلاق اليوم."
+                        "merge" -> "مواعيد السلسلة ما بتتغير، وجلسة بكرا بتطول."
+                        "keep" -> "مواعيد السلسلة ما بتتغير، وبكرا فيه جلستين."
+                        else -> "مواعيد السلسلة ما بتتغير، وهاي بتنسجل إنها ما انعملت."
+                    })
                 }
                 OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("ملاحظة (اختياري): ليش أجّلتها؟") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
             }

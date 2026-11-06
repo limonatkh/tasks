@@ -80,7 +80,8 @@ fun PhasesEditor(phases: List<Int>, change: (List<Int>) -> Unit) {
 fun phasesText(l: List<Int>) = if (l.size > 1) l.joinToString(",") else ""
 
 @Composable
-fun RepeatPicker(everyHours: String, weekdays: Int, setHours: (String) -> Unit, setDays: (Int) -> Unit, recovery: Boolean = false) {
+fun RepeatPicker(everyHours: String, weekdays: Int, setHours: (String) -> Unit, setDays: (Int) -> Unit, recovery: Boolean = false,
+                 realHours: Boolean = false, setReal: ((Boolean) -> Unit)? = null) {
     Text("التكرار", style = MaterialTheme.typography.labelLarge)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf("24", "48", "72", "96", "168").forEach { h ->
@@ -89,6 +90,14 @@ fun RepeatPicker(everyHours: String, weekdays: Int, setHours: (String) -> Unit, 
         }
     }
     Field(everyHours, if (recovery) "كل كم ساعة (الاستشفاء)" else "أو كل كم ساعة", { setHours(it); setDays(0) }, numeric = true)
+    val h = digits(everyHours).toIntOrNull() ?: 24
+    if (setReal != null && weekdays == 0 && h >= 24) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !realHours, onClick = { setReal(false) }, label = { Text("بالأيام: كل ${(h + 23) / 24} يوم") })
+            FilterChip(selected = realHours, onClick = { setReal(true) }, label = { Text("$h ساعة فعلية") })
+        }
+        Muted(if (realHours) "بتطلع بس لما يمرق $h ساعة من آخر ما خلّصت الجلسة، حتى لو صار هاد بنص اليوم." else "بالتاريخ: يوم آه ويوم لأ وهيك، بغض النظر عن الساعة.")
+    }
     Text("أو أيام محددة", style = MaterialTheme.typography.labelLarge)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         weekdayNames.forEachIndexed { i, name ->
@@ -113,6 +122,7 @@ fun TaskEditor(
     var color by remember { mutableIntStateOf(colorNow) }
     var icon by remember { mutableStateOf(iconNow ?: "") }
     var recurring by remember { mutableStateOf(false) }
+    var realHours by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf(t.title) }
     var minutes by remember { mutableStateOf(t.minutes.toString()) }
     var pinnedMinute by remember { mutableIntStateOf(if (t.pinned && t.planned > 0) Clock.minuteOfDay(t.planned) else -1) }
@@ -153,7 +163,7 @@ fun TaskEditor(
             FilterChip(selected = day == today.plusDays(1), onClick = { day = today.plusDays(1) }, label = { Text("بكرا") })
         }
         CategoryPicker(category, sport) { c, sp -> category = c; sport = sp }
-        if (isNew && recurring) RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport")
+        if (isNew && recurring) RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport", realHours = realHours, setReal = { realHours = it })
         TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "إخفاء الخيارات المتقدمة" else "خيارات متقدمة") }
         if (advanced) {
             if (isNew) PhasesEditor(phases) { phases = it }
@@ -188,7 +198,7 @@ fun TaskEditor(
             if (isNew && recurring) {
                 saveRule(
                     Rule(
-                        title = title.trim(), minutes = m, everyHours = (digits(everyHours).toIntOrNull() ?: 24).coerceIn(1, 24 * 60), weekdays = weekdays,
+                        title = title.trim(), minutes = m, everyHours = (digits(everyHours).toIntOrNull() ?: 24).coerceIn(1, 24 * 60), weekdays = weekdays, realHours = realHours && weekdays == 0,
                         preferredMinute = pinnedMinute, pinned = pinnedMinute >= 0, priority = priority,
                         interruptible = interruptible && category != "sport", kind = if (category == "sport") "training" else "task",
                         anchorDay = today.toString(), category = category, sport = if (category == "sport") sport else 0, phases = phasesText(phases),
@@ -242,6 +252,7 @@ fun RuleEditor(r: Rule, close: () -> Unit, save: (Rule) -> Unit, delete: () -> U
     var sport by remember { mutableIntStateOf(r.sport) }
     var phases by remember { mutableStateOf(parsePhases(r.phases)) }
     var atWork by remember { mutableStateOf(r.atWork) }
+    var realHours by remember { mutableStateOf(r.realHours) }
     var picking by remember { mutableStateOf(false) }
     val members = Members.parse(r.members)
     val m = digits(minutes).toIntOrNull() ?: 0
@@ -254,7 +265,8 @@ fun RuleEditor(r: Rule, close: () -> Unit, save: (Rule) -> Unit, delete: () -> U
             members.forEach { e -> Muted("${e.name}: ${e.sets} جولات × ${e.workSec} ث · راحة ${e.restSec / 60} د") }
         }
         SwitchRow("ضمن الجدول", active) { active = it }
-        if (!isPlan) RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport")
+        if (!isPlan) RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport",
+            realHours = realHours, setReal = { realHours = it })
         Row(verticalAlignment = Alignment.CenterVertically) {
             ClockIcon(if (preferred >= 0) preferred else null, 22.dp)
             Text(if (preferred >= 0) "  الوقت المفضّل: ${fmt12(preferred)}" else "  وقت تلقائي", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
@@ -273,7 +285,7 @@ fun RuleEditor(r: Rule, close: () -> Unit, save: (Rule) -> Unit, delete: () -> U
                 r.copy(
                     title = if (isPlan) r.title else title.trim(), minutes = if (isPlan) r.minutes else m,
                     everyHours = (digits(everyHours).toIntOrNull() ?: r.everyHours).coerceIn(1, 24 * 60),
-                    weekdays = weekdays, preferredMinute = preferred, pinned = pinned && preferred >= 0, active = active,
+                    weekdays = weekdays, preferredMinute = preferred, pinned = pinned && preferred >= 0, active = active, realHours = realHours && weekdays == 0,
                     interruptible = if (isPlan) r.interruptible else interruptible && category != "sport",
                     category = category, sport = if (category == "sport") sport else 0, phases = phasesText(phases), atWork = atWork,
                     anchorDay = if (active && !r.active) Clock.today().toString() else r.anchorDay,
@@ -444,6 +456,7 @@ fun PlanEditor(p: Plan, s: Snapshot, close: () -> Unit, save: (Plan, String) -> 
 @Composable
 fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) -> Unit, savePlan: (Plan) -> Unit, saveRule: (Rule) -> Unit, watchList: () -> Unit = {}) {
     var type by remember { mutableIntStateOf(0) } // 0 number, 1 amount, 2 habit
+    var realHours by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("sport") }
     var sport by remember { mutableIntStateOf(2) }
@@ -485,7 +498,7 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
                 SwitchRow("أضف جلسة متكررة بالجدول", withSession) { withSession = it }
                 if (withSession) {
                     Field(minutes, "مدة الجلسة بالدقائق", { minutes = it }, numeric = true)
-                    RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport")
+                    RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport", realHours = realHours, setReal = { realHours = it })
                 }
                 val c = digits(current).toDoubleOrNull(); val t = digits(target).toDoubleOrNull()
                 val ok = name.isNotBlank() && c != null && t != null && c > 0 && t > 0
@@ -494,7 +507,7 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
                     val g = Goal(id, name.trim(), category, c!!, t!!, unit.trim(), lower, baseline = c, startDay = today.toString(), targetDay = today.plusMonths(months12.toLong()).toString())
                     val rule = if (withSession) Rule(
                         id = "rule-$id", title = name.trim(), minutes = (digits(minutes).toIntOrNull() ?: 45).coerceIn(5, 600),
-                        everyHours = (digits(everyHours).toIntOrNull() ?: 72).coerceIn(1, 24 * 60), weekdays = weekdays, goalId = id,
+                        everyHours = (digits(everyHours).toIntOrNull() ?: 72).coerceIn(1, 24 * 60), weekdays = weekdays, goalId = id, realHours = realHours && weekdays == 0,
                         anchorDay = today.toString(), category = category, sport = if (category == "sport") sport else 0,
                         kind = if (category == "sport") "training" else "task",
                     ) else null
@@ -547,10 +560,10 @@ fun NewGoalSheet(today: LocalDate, close: () -> Unit, saveGoal: (Goal, Rule?) ->
             }
             else -> {
                 Field(minutes, "المدة بالدقائق", { minutes = it }, numeric = true)
-                RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport")
+                RepeatPicker(everyHours, weekdays, { everyHours = it }, { weekdays = it }, recovery = category == "sport", realHours = realHours, setReal = { realHours = it })
                 Action("حفظ", {
                     saveRule(Rule(title = name.trim(), minutes = (digits(minutes).toIntOrNull() ?: 30).coerceIn(5, 600),
-                        everyHours = (digits(everyHours).toIntOrNull() ?: 24).coerceIn(1, 24 * 60), weekdays = weekdays,
+                        everyHours = (digits(everyHours).toIntOrNull() ?: 24).coerceIn(1, 24 * 60), weekdays = weekdays, realHours = realHours && weekdays == 0,
                         anchorDay = today.toString(), category = category, sport = if (category == "sport") sport else 0,
                         kind = if (category == "sport") "training" else "task"))
                 }, Modifier.fillMaxWidth(), enabled = name.isNotBlank())
@@ -707,7 +720,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
             FilterChip(selected = !theme.mono, onClick = { theme.set(false) }, label = { Text("ملوّن") })
             FilterChip(selected = theme.mono, onClick = { theme.set(true) }, label = { Text("أبيض وأسود") })
         }
-        Muted("الإصدار 0.25")
+        Muted("الإصدار 0.26")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }
@@ -724,8 +737,12 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
 }
 
 @Composable
-fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, finish: (String) -> Unit) {
+fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, finish: (String) -> Unit, tomorrow: List<Task> = emptyList()) {
     val open = todays.filter { it.open }
+    // Before carrying: what tomorrow gets, and which series shift a day.
+    val stepsAside = open.mapNotNull { t -> t.ruleId?.let { rid -> tomorrow.firstOrNull { it.ruleId == rid && it.open && it.spent == 0L && it.doneUnits == 0 } } }
+    val tomorrowAfter = tomorrow.filter { it.open }.sumOf { it.minutes } - stepsAside.sumOf { it.minutes } +
+        open.sumOf { ((it.minutes * 60_000L - Maths.spent(it, now)).coerceAtLeast(0) / 60_000).toInt().coerceAtLeast(1) }
     Sheet("إغلاق اليوم", close) {
         Text("المخطط: ${todays.size} مهام · ${durLabel(todays.sumOf { it.minutes })}", style = MaterialTheme.typography.bodyLarge)
         Text("المنجز: ${todays.count { it.done }}", style = MaterialTheme.typography.bodyLarge)
@@ -733,9 +750,12 @@ fun CloseDayDialog(todays: List<Task>, now: Long, close: () -> Unit, finish: (St
         Text("الوقت الفعلي: ${durLabel((todays.sumOf { Maths.spent(it, now) } / 60_000).toInt())}", style = MaterialTheme.typography.bodyLarge)
         if (open.isNotEmpty()) {
             HorizontalDivider()
-            open.forEach { Text("• ${it.title}", style = MaterialTheme.typography.bodyLarge) }
+            open.forEach { t ->
+                val shifts = t.ruleId != null && stepsAside.any { it.ruleId == t.ruleId }
+                Text("• ${t.title}" + if (shifts) " ← بكرا، وجلستها الأصلية بتتأخر يوم" else " ← بكرا", style = MaterialTheme.typography.bodyLarge)
+            }
             Action("ترحيل لبكرا", { finish("carry") }, Modifier.fillMaxWidth())
-            Muted("بتنتقل لبكرا إجبارياً وبتاخد مكان الشبيهة إلها، وهديك بتتأخر لبعده.")
+            Muted("بكرا بيصير فيه ${durLabel(tomorrowAfter.coerceAtLeast(0))} مهام (هلأ ${durLabel(tomorrow.filter { it.open }.sumOf { it.minutes })}). نفس اللي بيصير لما تأجّل مهمة لحالها.")
             Secondary("إغلاق بدون ترحيل", { finish("close") }, Modifier.fillMaxWidth())
             Muted("الجدول بيضل زي ما هو، وبتنسجّل بالتقرير إنها ما انعملت.")
         } else Action("إغلاق اليوم", { finish("close") }, Modifier.fillMaxWidth())
