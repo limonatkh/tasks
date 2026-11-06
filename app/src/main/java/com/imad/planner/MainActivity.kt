@@ -401,6 +401,10 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
             route == "ig" -> { tab = 3; igOpen = true }
             route == "goal" -> newGoal = true
             // Used when checking the app on the emulator.
+            route == "menu" -> menuFor = repo.store.tasksOn(Clock.today().toString()).firstOrNull { it.open && it.ruleId != null }
+            route == "postpone" -> postponeFor = repo.store.tasksOn(Clock.today().toString()).firstOrNull { it.open && it.ruleId != null }
+            route == "askclose" -> closeDay = true
+            route == "rule48" -> { repo.store.allRules().firstOrNull { it.weekdays == 0 && it.everyHours >= 48 }?.let { r -> ruleEditor = r } }
             route == "closeday" -> { repo.closeDay("close"); snackbar.showSnackbar("انسكّر يوم ${repo.lastClosed}") }
             route == "reopen" -> { val n = repo.reopenDay(); snackbar.showSnackbar("انفتح اليوم من جديد، رجعت $n مهام") }
             route.startsWith("yeargoal:") -> route.removePrefix("yeargoal:").let { k ->

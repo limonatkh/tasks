@@ -26,6 +26,10 @@ jobs:
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Previous release (to check the upgrade)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download build-47 -p Smart-Life-Planner.apk -O old.apk -R ${{ github.repository }} || true
       - name: Run on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
