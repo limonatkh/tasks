@@ -724,7 +724,7 @@ fun SettingsDialog(s: Settings, close: () -> Unit, set: (String, String) -> Unit
         Muted("بتوقف الاحتفالات والحركات وبيضل كل إشي بمكانه. بتشتغل لحالها كمان إذا الجوال موقف الحركة.")
         SwitchRow("النقاط والمستويات", xpOn) { set("xp", if (it) "1" else "0") }
         Muted("النقاط بتنحسب من سجلّك الحقيقي: دقائق المؤقت والمهام المنجزة وأهدافك. إطفاؤها بيخفيها وما بيمسح إشي.")
-        Muted("الإصدار 0.31")
+        Muted("الإصدار 0.32")
     }
     pick?.let { key ->
         val initial = when (key) { "dayStart" -> s.dayStart; "dayEnd" -> s.dayEnd; "workEnd" -> s.workEnd; "jobStart" -> s.jobStart; "jobEnd" -> s.jobEnd; else -> s.sportEnd }
