@@ -58,7 +58,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 class IgFocusActivity : ComponentActivity() {
     private var web: WebView? = null
     private var tab by mutableIntStateOf(0)
-    private var progress by mutableIntStateOf(0)
+    private var pageProgress by mutableIntStateOf(0)
     private var stopped by mutableIntStateOf(0)
     private var note by mutableStateOf<String?>(null)
 
@@ -83,7 +83,7 @@ class IgFocusActivity : ComponentActivity() {
             addJavascriptInterface(Bridge(), "PlannerFocus")
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView, p: Int) {
-                    progress = p
+                    pageProgress = p
                     if (p > 30) view.evaluateJavascript(FOCUS_JS, null)
                 }
             }
@@ -134,7 +134,7 @@ class IgFocusActivity : ComponentActivity() {
                                     if (i == tab) web?.loadUrl(pages[i]) else { tab = i; web?.loadUrl(pages[i]) }
                                 }
                             }
-                            if (progress in 1..99) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(3.dp), color = ctaColor())
+                            if (pageProgress in 1..99) LinearProgressIndicator(progress = { pageProgress / 100f }, modifier = Modifier.fillMaxWidth().height(3.dp), color = ctaColor())
                             note?.let { Text(it, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                             Box(Modifier.weight(1f).fillMaxWidth()) { AndroidView(factory = { w }, modifier = Modifier.fillMaxSize()) }
                         }
