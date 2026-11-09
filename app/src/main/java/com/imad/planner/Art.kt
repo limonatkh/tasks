@@ -11,6 +11,11 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -440,12 +445,20 @@ fun HeaderButton(label: String, onClick: () -> Unit, content: @Composable () -> 
 
 // ---------------- The day's arc ----------------
 
+/** What the arc is showing: "now", or a moment the user picked on it. */
+class ArcPick(val minute: Int, val now: Boolean)
+
 /**
  * The sky arc of the day: each prayer is a station along it (right = morning, as the day reads in Arabic), the
  * part already lived is golden, and «نور» stands where the time is now. [periods] must be in time order.
+ *
+ * It answers touch: tap «نور» for now; tap anywhere on the line (or drag along it) and «نور» walks there (350 ms)
+ * and [card] shows that moment; it walks back home after 8 s, or on a second tap of «نور», or from the card's ×.
+ * Stations are magnetic: a tap near one picks the station's start.
  */
 @Composable
-fun DayArc(periods: List<Period>, minute: Int, line: String, modifier: Modifier = Modifier) {
+fun DayArc(periods: List<Period>, minute: Int, line: String, modifier: Modifier = Modifier,
+           card: @Composable ColumnScope.(ArcPick, () -> Unit) -> Unit = { _, _ -> }) {
     val mono = LocalThemeChoice.current.mono
     val calm = calmMotion()
     val inf = rememberInfiniteTransition(label = "arc")
@@ -455,38 +468,121 @@ fun DayArc(periods: List<Period>, minute: Int, line: String, modifier: Modifier 
     val from = periods.first().start
     val to = periods.last().end.coerceAtLeast(periods.last().start + 60)
     fun frac(m: Int) = ((m - from).toFloat() / (to - from)).coerceIn(0f, 1f)
+    fun minuteAt(t: Float) = (from + t * (to - from)).toInt()
     val now = frac(minute)
-    Box(modifier.fillMaxWidth().height(104.dp).semantics { contentDescription = line }) {
-        Canvas(Modifier.fillMaxWidth().height(104.dp)) {
-            val wpx = size.width
-            val hpx = size.height
-            val p0 = Offset(wpx - 18.dp.toPx(), hpx - 24.dp.toPx())
-            val p1 = Offset(wpx / 2, -hpx * 0.42f)
-            val p2 = Offset(18.dp.toPx(), hpx - 24.dp.toPx())
-            fun at(t: Float): Offset {
-                val a = (1 - t) * (1 - t); val b = 2 * (1 - t) * t; val c = t * t
-                return Offset(a * p0.x + b * p1.x + c * p2.x, a * p0.y + b * p1.y + c * p2.y)
+    var pick by remember { androidx.compose.runtime.mutableStateOf<ArcPick?>(null) }
+    var poke by remember { mutableIntStateOf(0) }
+    val walk = remember { Animatable(now) }
+    // «نور» walks to the picked moment and back; without a pick it simply follows the clock.
+    LaunchedEffect(pick?.minute, pick?.now, now) {
+        val target = pick?.takeIf { !it.now }?.let { frac(it.minute) } ?: now
+        if (calm) walk.snapTo(target) else walk.animateTo(target, tween(350, easing = FastOutSlowInEasing))
+    }
+    LaunchedEffect(pick, poke) {
+        if (pick != null) { delay(8000); pick = null }
+    }
+    val hop = remember { Animatable(0f) }
+    LaunchedEffect(poke) {
+        if (poke != 0 && !calm) { hop.animateTo(-10f, tween(140)); hop.animateTo(0f, spring(dampingRatio = 0.35f, stiffness = 500f)) }
+    }
+    val stationT = periods.map { frac(it.start) }
+    Column(modifier.fillMaxWidth().animateContentSize()) {
+        Box(Modifier.fillMaxWidth().height(110.dp).semantics { contentDescription = line + ". اضغط على الفانوس أو على أي مكان بالخط" }) {
+            Canvas(
+                Modifier.fillMaxWidth().height(110.dp)
+                    .pointerInput(periods, minute) {
+                        val geo = ArcGeo(size.width.toFloat(), size.height.toFloat(), density)
+                        detectTapGestures { pos ->
+                            val (t, d) = geo.nearest(pos)
+                            val nourAt = geo.at(walk.value)
+                            when {
+                                (pos - nourAt).getDistance() < 34.dp.toPx() -> {
+                                    // «نور» itself: now; a second tap while showing now closes it.
+                                    pick = if (pick?.now == true) null else ArcPick(minute, true); poke++
+                                }
+                                d < 30.dp.toPx() -> {
+                                    val snap = stationT.withIndex().minByOrNull { kotlin.math.abs(it.value - t) }
+                                        ?.takeIf { (geo.at(it.value) - pos).getDistance() < 22.dp.toPx() }
+                                    pick = ArcPick(snap?.let { periods[it.index].start } ?: minuteAt(t), false); poke++
+                                }
+                                else -> pick = null
+                            }
+                        }
+                    }
+                    .pointerInput(periods, minute) {
+                        val geo = ArcGeo(size.width.toFloat(), size.height.toFloat(), density)
+                        detectDragGestures { change, _ ->
+                            val (t, d) = geo.nearest(change.position)
+                            if (d < 60.dp.toPx()) { pick = ArcPick(minuteAt(t), false); change.consume() }
+                        }
+                    },
+            ) {
+                val geo = ArcGeo(size.width, size.height, density)
+                val stroke = 8.dp.toPx()
+                drawPath(geo.path(0f, 1f), Color.White.copy(alpha = 0.22f), style = Stroke(stroke, cap = StrokeCap.Round))
+                if (now > 0f) drawPath(geo.path(0f, now), Brand.star.tone(mono), style = Stroke(stroke, cap = StrokeCap.Round))
+                // A picked moment gets a thin white mark on the line.
+                pick?.takeIf { !it.now }?.let { p ->
+                    val c = geo.at(frac(p.minute))
+                    drawCircle(Color.White, 5.dp.toPx(), c)
+                }
+                periods.forEachIndexed { i, p ->
+                    val c = geo.at(stationT[i])
+                    val chosen = pick?.let { !it.now && it.minute >= p.start && it.minute < p.end } == true
+                    val r = (if (chosen) 9.dp else 7.dp).toPx()
+                    drawCircle(colors[i].tone(mono), r, c)
+                    drawCircle(if (chosen) Color.White else Ink, r, c, style = Stroke(2.dp.toPx()))
+                }
+                val n = geo.at(walk.value)
+                val s = 48.dp.toPx()
+                val away = kotlin.math.abs(walk.value - now) > 0.01f
+                translate(n.x - s / 2, n.y - s * 0.62f + hop.value * density) {
+                    scale(s / 200f, s / 200f, Offset.Zero) { drawNour(if (pick?.now == true) NourMood.Happy else NourMood.Awake, 1f, if (calm) 0.6f else glow, 0f, mono) }
+                }
+                // While «نور» is away, a small ghost dot keeps the real now in sight.
+                if (away) drawCircle(Brand.star.tone(mono), 6.dp.toPx(), geo.at(now))
             }
-            val stroke = 8.dp.toPx()
-            drawPath(path { moveTo(p0.x, p0.y); quadraticBezierTo(p1.x, p1.y, p2.x, p2.y) }, Color.White.copy(alpha = 0.22f), style = Stroke(stroke, cap = StrokeCap.Round))
-            if (now > 0f) {
-                // The lived part is the same curve cut at "now" (de Casteljau).
-                val c1 = Offset(p0.x + (p1.x - p0.x) * now, p0.y + (p1.y - p0.y) * now)
-                val e = at(now)
-                drawPath(path { moveTo(p0.x, p0.y); quadraticBezierTo(c1.x, c1.y, e.x, e.y) }, Brand.star.tone(mono), style = Stroke(stroke, cap = StrokeCap.Round))
-            }
-            periods.forEachIndexed { i, p ->
-                val c = at(frac(p.start))
-                drawCircle(colors[i].tone(mono), 7.dp.toPx(), c)
-                drawCircle(Ink, 7.dp.toPx(), c, style = Stroke(2.dp.toPx()))
-            }
-            val n = at(now)
-            val s = 46.dp.toPx()
-            translate(n.x - s / 2, n.y - s * 0.62f) {
-                scale(s / 200f, s / 200f, Offset.Zero) { drawNour(NourMood.Awake, 1f, if (calm) 0.6f else glow, 0f, mono) }
+            Text(line, Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, textAlign = TextAlign.Center)
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            pick != null,
+            enter = androidx.compose.animation.fadeIn(tween(if (calm) 0 else 180)) + androidx.compose.animation.expandVertically(tween(if (calm) 0 else 240)),
+            exit = androidx.compose.animation.fadeOut(tween(if (calm) 0 else 140)) + androidx.compose.animation.shrinkVertically(tween(if (calm) 0 else 200)),
+        ) {
+            val shown = remember { androidx.compose.runtime.mutableStateOf(ArcPick(minute, true)) }
+            pick?.let { shown.value = it }
+            Column(
+                Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface)
+                    .pointerInput(Unit) { detectTapGestures { poke++ } }
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                    card(shown.value) { pick = null }
+                }
             }
         }
-        Text(line, Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, textAlign = TextAlign.Center)
+    }
+}
+
+/** Where the arc runs inside a box of [w]×[h] px: a quadratic curve from right to left. */
+private class ArcGeo(w: Float, h: Float, density: Float) {
+    private val p0 = Offset(w - 18 * density, h - 26 * density)
+    private val p1 = Offset(w / 2, -h * 0.42f)
+    private val p2 = Offset(18 * density, h - 26 * density)
+    fun at(t: Float): Offset {
+        val a = (1 - t) * (1 - t); val b = 2 * (1 - t) * t; val c = t * t
+        return Offset(a * p0.x + b * p1.x + c * p2.x, a * p0.y + b * p1.y + c * p2.y)
+    }
+    fun path(t0: Float, t1: Float) = Path().apply {
+        val a = at(t0); moveTo(a.x, a.y)
+        for (i in 1..48) { val b = at(t0 + (t1 - t0) * i / 48f); lineTo(b.x, b.y) }
+    }
+    /** Closest point of the line to [p]: its position 0..1 and the distance in px. */
+    fun nearest(p: Offset): Pair<Float, Float> {
+        var best = 0f; var bd = Float.MAX_VALUE
+        for (i in 0..200) { val t = i / 200f; val d = (at(t) - p).getDistance(); if (d < bd) { bd = d; best = t } }
+        return best to bd
     }
 }
 

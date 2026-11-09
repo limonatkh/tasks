@@ -510,7 +510,7 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
                 sub = when (tab) { 1 -> "بكرا والأسبوع والشهر"; 2 -> "السنة وطريق كل هدف"; else -> dayLabel(today) },
                 actions = {
                     if (tab == 0 && xpOn) LevelChip(summary.total) { tab = 2 }
-                    if (tab == 3) HeaderButton("الفيد", { igOpen = true }) { Text("الفيد", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+                    if (tab == 3) HeaderButton("إنستغرام بلا ريلز", { igOpen = true }) { Text("الفيد", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
                     Box {
                         HeaderButton("إضافة", { addMenu = true }) { Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White) }
                         DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
@@ -528,7 +528,10 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
                         val cur = periods.getOrNull(i)
                         val next = periods.getOrNull(i + 1)
                         val line = listOfNotNull(cur?.name, next?.let { "باقي ${untilLabel(minute, it.start)} لل${it.name.removePrefix("ال")}" }).joinToString(" · ")
-                        DayArc(periods, minute, line)
+                        DayArc(periods, minute, line) { pick, close ->
+                            ArcCard(snap, pick, periods, minute, if (xpOn) summary else null, nav,
+                                add = { key -> close(); creating = emptyTask(today).copy(period = key) }, close = close)
+                        }
                     }
                 },
             )
@@ -660,7 +663,11 @@ fun Planner(repo: Repository, route: String? = null, routeDone: () -> Unit = {})
         set = { k, v -> act { repo.setSetting(k, v) } },
         weekPlan = { weekPlan = true },
     ))
-    if (igOpen) IgFeedScreen(snap, close = { igOpen = false }, repo = repo)
+    // The feed is Instagram's own site without Reels and Explore (its own screen, so back works page by page).
+    if (igOpen) {
+        val ctx = LocalContext.current
+        LaunchedEffect(Unit) { ctx.startActivity(android.content.Intent(ctx, IgFocusActivity::class.java)); igOpen = false }
+    }
     ytFor?.let { t -> YtLinkDialog(t, snap.settings.ytLinks[seriesOf(t)], close = { ytFor = null }) { l -> act { repo.setYt(seriesOf(t), l) } } }
     splitFor?.let { t -> SplitDialog(t, close = { splitFor = null }) { n -> act { repo.splitTask(t.id, n) } } }
     contFor?.let { t -> PeriodPicker(snap.settings.periodsOn(today), Clock.minuteOfDay(now), close = { contFor = null }) { k -> act { repo.continueLater(t.id, k) } } }
@@ -1498,5 +1505,82 @@ fun PeriodLane(accent: Color, content: @Composable () -> Unit) {
     Row(Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Min)) {
         Box(Modifier.padding(start = 3.dp).width(3.dp).fillMaxHeight().background(accent.copy(alpha = 0.55f), RoundedCornerShape(2.dp)))
         Box(Modifier.padding(start = 9.dp).weight(1f)) { content() }
+    }
+}
+
+
+/**
+ * The card under the arc. For "now": where the day stands (done, real time, points today), what is running or next,
+ * with start. For a picked moment: its period, how far it is from now, its tasks (each opens its card), and adding one there.
+ */
+@Composable
+fun ColumnScope.ArcCard(s: Snapshot, pick: ArcPick, periods: List<Period>, minute: Int, sum: Progress.Summary?, nav: Nav,
+                        add: (String) -> Unit, close: () -> Unit) {
+    val todays = todayTasks(s)
+    val p = periods.lastOrNull { pick.minute >= it.start } ?: periods.first()
+    val here = todays.filter { it.period == p.key }
+    val accent = periodAccent(p.key)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.size(12.dp).clip(RoundedCornerShape(6.dp)).background(accent))
+        Text(if (pick.now) "هلأ · ${p.name}" else p.name, Modifier.weight(1f), fontFamily = DisplayFont, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        val rel = when {
+            pick.now -> fmt12(minute)
+            pick.minute > minute -> "بعد ${durLabel(pick.minute - minute)}"
+            pick.minute < minute -> "من ${durLabel(minute - pick.minute)}"
+            else -> "هلأ"
+        }
+        Text("${fmt12(pick.minute)} · $rel".takeIf { !pick.now } ?: rel, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(onClick = close, modifier = Modifier.size(36.dp)) { Icon(Icons.Filled.Close, contentDescription = "إغلاق", modifier = Modifier.size(18.dp)) }
+    }
+    Text("${fmt12(p.start)} – ${fmt12(p.end)}" + if (here.isNotEmpty()) " · ${here.count { it.done }} من ${here.size} منجزة" else " · فاضية",
+        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (pick.now) {
+        // The whole day in three numbers.
+        val done = todays.count { it.done }
+        val realMin = todays.sumOf { Maths.spent(it, s.now) } / 60_000
+        val pts = todays.sumOf { Progress.pointsOf(it, s.now) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ArcStat("$done/${todays.size}", "منجزة اليوم", Modifier.weight(1f))
+            ArcStat(durLabel(realMin.toInt()), "وقت حقيقي", Modifier.weight(1f))
+            if (sum != null) ArcStat("+$pts", "نقاط اليوم", Modifier.weight(1f))
+        }
+        if (sum != null) {
+            Bar(sum.total.fraction, onBand = false)
+            Muted("مستوى ${ar(sum.total.level)} · ${sum.total.name} · باقي ${ar(sum.total.left)} نقطة")
+        }
+        val running = todays.firstOrNull { it.running }
+        val next = running ?: todays.firstOrNull { it.open && it.period == p.key } ?: todays.firstOrNull { it.open }
+        next?.let { t ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                DomainTile(domainOf(t, s.settings), 40.dp, s.settings.icons[seriesOf(t)]?.takeIf { s.settings.nameStyle != "name" })
+                Column(Modifier.weight(1f).clickable { nav.taskMenu(t) }) {
+                    Text(if (t.running) "شغّالة هلأ" else "الجاية", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = warmText())
+                    Text(t.title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
+                if (!t.running) Action("ابدأ", { close(); nav.start(t, false) })
+            }
+        } ?: Muted("ما ضل ولا مهمة مفتوحة اليوم ✓")
+    } else {
+        here.take(4).forEach { t ->
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { nav.taskMenu(t) }.padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                DomainTile(domainOf(t, s.settings), 34.dp, s.settings.icons[seriesOf(t)]?.takeIf { s.settings.nameStyle != "name" }, done = !t.open)
+                Text(t.title, Modifier.weight(1f), maxLines = 1, color = if (t.open) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (t.done) "✓" else durLabel(t.minutes), fontSize = 13.sp, color = if (t.done) doneColor() else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (here.size > 4) Muted("و${here.size - 4} كمان")
+        val free = (p.end - maxOf(p.start, minute)).coerceAtLeast(0) - here.filter { it.open }.sumOf { Maths.remaining(it, s.now).toInt() / 60_000 }
+        if (p.end > minute) Muted(if (free > 0) "فيها وقت فاضي تقريباً ${durLabel(free)}" else "مليانة")
+        Secondary("+ مهمة بال${p.name.removePrefix("ال")}", { add(p.key) }, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun ArcStat(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier.clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.primaryContainer).padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, fontFamily = DisplayFont, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
