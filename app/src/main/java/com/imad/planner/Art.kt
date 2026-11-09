@@ -488,9 +488,9 @@ fun DayArc(periods: List<Period>, minute: Int, line: String, modifier: Modifier 
     val stationT = periods.map { frac(it.start) }
     Column(modifier.fillMaxWidth().animateContentSize()) {
         // Room above the line, so «نور» at the top of the sky is not cut by the edge.
-        Box(Modifier.fillMaxWidth().padding(top = 20.dp).height(110.dp).semantics { contentDescription = line + ". اضغط على الفانوس أو على أي مكان بالخط" }) {
+        Box(Modifier.fillMaxWidth().padding(top = 20.dp).height(126.dp).semantics { contentDescription = line + ". اضغط على الفانوس أو على أي مكان بالخط" }) {
             Canvas(
-                Modifier.fillMaxWidth().height(110.dp)
+                Modifier.fillMaxWidth().height(126.dp)
                     .pointerInput(periods, minute) {
                         val geo = ArcGeo(size.width.toFloat(), size.height.toFloat(), density)
                         detectTapGestures { pos ->
@@ -569,7 +569,8 @@ fun DayArc(periods: List<Period>, minute: Int, line: String, modifier: Modifier 
 /** Where the arc runs inside a box of [w]×[h] px: a quadratic curve from right to left. */
 private class ArcGeo(w: Float, h: Float, density: Float) {
     private val p0 = Offset(w - 18 * density, h - 26 * density)
-    private val p1 = Offset(w / 2, -h * 0.42f)
+    // The top of the curve sits ~34 dp down, so «نور» (48 dp, standing on the line) never pokes out of the box.
+    private val p1 = Offset(w / 2, -h * 0.24f)
     private val p2 = Offset(18 * density, h - 26 * density)
     fun at(t: Float): Offset {
         val a = (1 - t) * (1 - t); val b = 2 * (1 - t) * t; val c = t * t
