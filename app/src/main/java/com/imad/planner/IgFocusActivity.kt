@@ -155,7 +155,7 @@ class IgFocusActivity : ComponentActivity() {
             }
             val start = intent.getStringExtra("url")?.takeIf { it.startsWith("https://www.instagram.com/") }
             if (start != null && blocked(android.net.Uri.parse(start).path)) { stopped++; loadUrl(inbox) }
-            else loadUrl(start ?: if (Ig.loggedIn()) inbox else "https://www.instagram.com/accounts/login/")
+            else loadUrl(start ?: if (Ig.loggedIn()) inbox else "https://www.instagram.com/")
             if (start != null || !Ig.loggedIn()) tab = 1
         }
         web = w
@@ -201,7 +201,7 @@ class IgFocusActivity : ComponentActivity() {
                                     HeaderButton("رجوع للمخطط", { finish() }) { Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White) }
                                 }
                                 Segmented(listOf("حساباتي", "الرسائل"), tab) { i ->
-                                    if (i == 1) { if (tab == 1 || w.url?.contains("/direct/") != true) w.loadUrl(if (loggedIn) inbox else "https://www.instagram.com/accounts/login/") }
+                                    if (i == 1) { if (tab == 1 || w.url?.contains("/direct/") != true) w.loadUrl(if (loggedIn) inbox else "https://www.instagram.com/") }
                                     tab = i
                                 }
                             }
@@ -300,7 +300,7 @@ class IgFocusActivity : ComponentActivity() {
             if (!loggedIn) item {
                 Panel {
                     NourNote(NourMood.Awake, "سجّل دخول مرة وحدة", "بصفحة إنستغرام نفسها. بعدها بتجيك ستوريات ومنشورات الحسابات اللي بتختارها.", 90.dp)
-                    Action("تسجيل الدخول", { openWeb("https://www.instagram.com/accounts/login/") }, Modifier.fillMaxWidth())
+                    Action("تسجيل الدخول", { openWeb("https://www.instagram.com/") }, Modifier.fillMaxWidth())
                 }
             }
             item {
@@ -314,6 +314,7 @@ class IgFocusActivity : ComponentActivity() {
                             value = text, onValueChange = { text = it; wrong = false }, singleLine = true, isError = wrong,
                             label = { Text("رابط الحساب أو اسمه") }, placeholder = { Text("instagram.com/... أو @name") },
                             shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
+                            textStyle = androidx.compose.material3.LocalTextStyle.current.copy(textDirection = androidx.compose.ui.text.style.TextDirection.Content),
                         )
                         if (wrong) Text("ما عرفت الحساب من هاد. الصق رابط صفحته أو اكتب اسمه.", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
                         Action("إضافة", {
@@ -329,12 +330,12 @@ class IgFocusActivity : ComponentActivity() {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         people.forEach { p ->
                             InputChip(selected = false, onClick = { if (manage) save(people - p) else openWeb("https://www.instagram.com/${p.user}/") },
-                                label = { Text("@" + p.user) },
+                                label = { Text("\u2066@${p.user}\u2069") },
                                 avatar = accounts[p.user]?.pic?.let { url -> { AsyncImage(url, null, Modifier.size(22.dp).clip(CircleShape), contentScale = ContentScale.Crop) } },
                                 trailingIcon = if (manage) ({ Icon(Icons.Filled.Close, contentDescription = "شيل ${p.user}", modifier = Modifier.size(16.dp)) }) else null)
                         }
                     }
-                    problems.forEach { (u, why) -> Text("@$u: $why", fontSize = 13.sp, color = warmText()) }
+                    problems.forEach { (u, why) -> Text("\u2066@$u\u2069: $why", fontSize = 13.sp, color = warmText()) }
                 }
             }
             if (people.isNotEmpty() && loggedIn) item {
