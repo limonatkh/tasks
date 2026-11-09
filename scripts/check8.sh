@@ -10,7 +10,7 @@ A root; sleep 3
 A shell pm disable-user --user 0 com.google.android.apps.nexuslauncher || true
 for k in window_animation_scale transition_animation_scale animator_duration_scale; do A shell settings put global $k 1; done
 A shell settings put global auto_time 0
-A shell "date 11091130" || true
+A shell "date 11091300" || true
 spot() { A shell uiautomator dump /sdcard/u.xml >/dev/null; A pull /sdcard/u.xml /tmp/u.xml >/dev/null; python3 scripts/find.py /tmp/u.xml "$1"; }
 nowait() { local w; w=$(spot "text:Wait"); [ -n "$w" ] && A shell input tap $w && sleep 1; }
 tap() { nowait; local xy; xy=$(spot "$1"); echo "tap $1 -> $xy"; [ -n "$xy" ] && A shell input tap $xy; }

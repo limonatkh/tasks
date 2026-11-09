@@ -27,7 +27,7 @@ def find(test, y0, y1):
     pts = [(x, y) for y in range(y0, y1, 2) for x in range(0, w, 2) if test(*px(x, y))]
     if not pts: return None
     return sum(p[0] for p in pts) // len(pts), sum(p[1] for p in pts) // len(pts)
-top, bot = int(h * 0.11), int(h * 0.26)
+top, bot = int(h * 0.10), int(h * 0.28)
 nour = find(lambda r, g, b: r > 230 and 120 < g < 160 and b < 90, top, bot)            # lantern orange #FF8A3D
 pink = find(lambda r, g, b: 180 < r < 210 and 70 < g < 100 and 105 < b < 135, top, bot)  # maghrib #C0587A
 if not nour: nour = (w // 2, int(h * 0.17))

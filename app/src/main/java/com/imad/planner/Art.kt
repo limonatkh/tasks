@@ -487,7 +487,8 @@ fun DayArc(periods: List<Period>, minute: Int, line: String, modifier: Modifier 
     }
     val stationT = periods.map { frac(it.start) }
     Column(modifier.fillMaxWidth().animateContentSize()) {
-        Box(Modifier.fillMaxWidth().height(110.dp).semantics { contentDescription = line + ". اضغط على الفانوس أو على أي مكان بالخط" }) {
+        // Room above the line, so «نور» at the top of the sky is not cut by the edge.
+        Box(Modifier.fillMaxWidth().padding(top = 20.dp).height(110.dp).semantics { contentDescription = line + ". اضغط على الفانوس أو على أي مكان بالخط" }) {
             Canvas(
                 Modifier.fillMaxWidth().height(110.dp)
                     .pointerInput(periods, minute) {
