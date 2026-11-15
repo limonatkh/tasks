@@ -2393,8 +2393,9 @@ class Repository(private val context: Context) {
         val logs = JSONArray()
         store.allLogs().forEach { l -> logs.put(JSONObject().put("id", l.id).put("goalId", l.goalId).put("day", l.day).put("value", l.value)) }
         val meta = JSONObject()
-        (Settings.KEYS + listOf("plans", "months", "seed-v3", "seed-v4", "seed-v5", "seed-v6", "targets", "routineWeeks", "igPeople2")).forEach { k -> store.meta(k)?.let { meta.put(k, it) } }
-        store.allMeta().filter { it.key.startsWith("pomo:") || it.key.startsWith("dayPlanned:") || it.key.startsWith("quran:") }.forEach { meta.put(it.key, it.value) }
+        // Every saved setting and state (closed days, plans, points seen, Quran state, Instagram accounts…),
+        // except the one-step undo, which only makes sense on the phone that made it.
+        store.allMeta().filter { it.key !in setOf("undo", "undoLabel", "undoAt") }.forEach { meta.put(it.key, it.value) }
         val events = JSONArray()
         store.allEvents().forEach { e ->
             events.put(JSONObject().put("id", e.id).put("taskId", e.taskId ?: JSONObject.NULL).put("series", e.series).put("day", e.day)

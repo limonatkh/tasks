@@ -35,6 +35,11 @@ jobs:
           set -o pipefail
           gradle assembleRelease --console=plain 2>&1 | tee -a build.log
 
+      - name: Sign
+        env:
+          PLANNER_KS_PASS: ${{ secrets.PLANNER_KS_PASS }}
+        run: bash scripts/sign.sh
+
       - name: Report errors
         if: failure()
         shell: bash

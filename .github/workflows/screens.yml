@@ -22,6 +22,11 @@ jobs:
         with: { gradle-version: "8.9" }
       - name: Build
         run: gradle assembleRelease --console=plain
+      - name: Sign
+        env:
+          PLANNER_KS_PASS: ${{ secrets.PLANNER_KS_PASS }}
+          MAKE_ATTACK: "1"
+        run: bash scripts/sign.sh
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -29,7 +34,7 @@ jobs:
       - name: Previous release (to check the upgrade)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download build-47 -p Smart-Life-Planner.apk -O old.apk -R ${{ github.repository }} || true
+        run: gh release download build-68 -p Smart-Life-Planner.apk -O old.apk -R ${{ github.repository }} || true
       - name: Run on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:

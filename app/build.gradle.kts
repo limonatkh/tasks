@@ -13,29 +13,17 @@ android {
         applicationId = "com.imad.planner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 34
-        versionName = "0.33"
+        versionCode = 35
+        versionName = "0.34"
     }
 
-    signingConfigs {
-        // Fixed key kept in the repo so every future build installs as an update over the previous one.
-        create("personal") {
-            storeFile = file("planner.keystore")
-            storePassword = "planner123"
-            keyAlias = "planner"
-            keyPassword = "planner123"
-        }
-    }
-
+    // Release APKs come out unsigned here and are signed by scripts/sign.sh in CI with the private key
+    // (kept encrypted in signing/, opened by a repository secret). Debug builds use Android's local debug key.
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("personal")
-        }
-        debug {
-            signingConfig = signingConfigs.getByName("personal")
         }
     }
 
