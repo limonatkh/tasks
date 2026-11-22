@@ -14,16 +14,20 @@ shot() { sleep "${2:-4}"; A exec-out screencap -p > "shots/$1.png"; }
 ls -la old.apk attack.apk app/build/outputs/apk/release/
 A install old.apk | tee shots/install-old.txt
 A shell dumpsys package $P | grep -E "versionName|signatures" | tee shots/old-package.txt
+A shell pm grant $P android.permission.POST_NOTIFICATIONS
 A shell am start -n $P/.MainActivity; sleep 6; A shell am force-stop $P
 printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <boolean name="unlocked" value="true" />\n</map>\n' > /tmp/lock.xml
 A push /tmp/lock.xml /data/data/$P/shared_prefs/lock.xml
 U=$(A shell stat -c %u /data/data/$P | tr -d '\r'); A shell chown $U:$U /data/data/$P/shared_prefs/lock.xml
 A shell am start -n $P/.MainActivity; shot 01-old-today 8
 tap "desc:علّم"; shot 02-old-one-done 3
+A shell "sqlite3 /data/data/$P/databases/*.db \"select count(*), sum(state='done') from tasks; select count(*) from meta;\"" | tee shots/db-old.txt || true
 A shell am force-stop $P
 # The update.
 A install -r app/build/outputs/apk/release/app-release.apk 2>&1 | tee shots/install-new.txt
 A shell dumpsys package $P | grep -E "versionName|signatures|pastSigs|signing" | tee shots/new-package.txt
+A shell pm grant $P android.permission.POST_NOTIFICATIONS
+A shell "sqlite3 /data/data/$P/databases/*.db \"select count(*), sum(state='done') from tasks; select count(*) from meta;\"" | tee shots/db-new.txt || true
 A shell am start -n $P/.MainActivity; shot 03-new-today-kept 8
 A shell am start -S -n $P/.MainActivity --es open tab:2; shot 04-new-goals 6
 # The old public key alone must not be able to replace it.
