@@ -10,7 +10,7 @@ import java.nio.file.Files
 /**
  * Draws the computer's screens into PNG files without opening a window, so CI can show what the app looks like.
  * Runs on a throwaway store in a temporary folder with a few sample tasks: it never touches anyone's data file.
- * Usage: gradle :desktop:shots (writes desktop/build/shots/*.png).
+ * Usage: gradle :desktop:shots (writes PNG files to desktop/build/shots).
  */
 fun main(args: Array<String>) {
     val out = File(args.getOrElse(0) { "build/shots" }).apply { mkdirs() }
