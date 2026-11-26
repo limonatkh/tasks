@@ -43,11 +43,11 @@ jobs:
         run: |
           # Room writes a hash of the whole database shape into the generated code. If it differs from main while the
           # version number (6) is the same, installed phones would refuse to open their data. Stop here if so.
-          hash() { grep -rhoE '"[0-9a-f]{32}"' "$1" | sort -u | xargs; }
+          hash() { grep -rhoE '"[0-9a-f]{32}"' "$@" 2>/dev/null | sort -u | xargs; }
           NEW=$(hash android/build/generated/ksp/release)
           git worktree add -q /tmp/base origin/main
           (cd /tmp/base && gradle :app:kspReleaseKotlin --console=plain -q)
-          OLD=$(hash /tmp/base/app/build/generated/ksp/release 2>/dev/null || hash /tmp/base/android/build/generated/ksp/release)
+          OLD=$(hash /tmp/base/android/build/generated/ksp/release /tmp/base/app/build/generated/ksp/release 2>/dev/null)
           echo "main: $OLD"; echo "this: $NEW"
           [ -n "$NEW" ] && [ "$NEW" = "$OLD" ] || { echo "::error::Room schema hash changed: $OLD -> $NEW"; exit 1; }
 
