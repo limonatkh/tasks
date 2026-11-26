@@ -1748,6 +1748,9 @@ class Repository(val store: Store, val platform: Platform) {
             .put("rules", rules).put("logs", logs).put("events", events).put("settings", meta).toString(2)
     }
 
+    /** Loads the computer's own data file at start-up, as it is: no safety copy and no undo entry. */
+    suspend fun load(text: String) = locked { restoreLocked(text) }
+
     /** Accepts backups of every version of the app. The current data is kept first so the restore can be undone. */
     suspend fun restore(text: String) = locked {
         val root = JSONObject(text)
