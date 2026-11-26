@@ -6,3 +6,4 @@ local.properties
 *.jks
 *.p12
 !signing/*.enc
+google-services.json
