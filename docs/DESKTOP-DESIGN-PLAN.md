@@ -1,6 +1,6 @@
 # Desktop design: plan (not approved yet)
 
-Status 2026-11-26: the design canvas «رحلة اليوم – اللابتوب» was created (https://claude.ai/artifact/8wZdsrHHGVvcYFMj1jA4Jn, empty).
+Status 2026-11-26: four mockups drawn on the canvas «رحلة اليوم – اللابتوب» (https://claude.ai/artifact/8wZdsrHHGVvcYFMj1jA4Jn, private to the user); source copied in `design-board/desktop/`. Waiting for approval.
 No mockup drawn yet. Build the boards from `DESIGN.md` and `design-board/` (copy the inline SVG of «نور», domain tiles and nav icons from boards 1, 3, 4).
 
 ## Screens to mock up (audit)
