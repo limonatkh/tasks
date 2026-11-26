@@ -105,6 +105,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -136,6 +137,8 @@ class MainActivity : ComponentActivity() {
         Alarms.channels(this)
         repo = Repository.get(this)
         lifecycleScope.launch { runCatching { repo.initialize() } }
+        // Sync with the computer while the app is on screen (does nothing until sync is set up in Settings).
+        lifecycleScope.launch { repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) { PhoneSync.loop(this@MainActivity, repo) } }
         // A notification's action runs once: not again when Android restores the screen or it is opened from recent apps.
         if (savedInstanceState == null && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) readRoute(intent)
         else intent.removeExtra("startQuran")

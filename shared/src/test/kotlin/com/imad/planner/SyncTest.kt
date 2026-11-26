@@ -17,6 +17,7 @@ class SyncTest {
         val m = HashMap<String, String>()
         override fun get(key: String) = m[key]
         override fun set(key: String, value: String?) { if (value == null) m.remove(key) else m[key] = value }
+        override fun all(prefix: String) = m.filterKeys { it.startsWith(prefix) }
     }
 
     private class Device(cloud: Cloud, name: String) {

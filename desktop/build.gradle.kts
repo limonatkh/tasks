@@ -17,8 +17,24 @@ kotlin {
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
+// firebase.properties (project id and the app's public web key) is made from android/google-services.json, which is
+// not in git; CI writes it from the GOOGLE_SERVICES_JSON secret. Without it the app works but cannot sync.
+val firebaseProps by tasks.registering {
+    val src = rootProject.file("android/google-services.json")
+    val out = layout.buildDirectory.dir("generated/firebase")
+    inputs.property("config", providers.provider { if (src.exists()) src.readText() else "" })
+    outputs.dir(out)
+    doLast {
+        val text = if (src.exists()) src.readText() else ""
+        fun pick(name: String) = Regex("\"$name\"\\s*:\\s*\"([^\"]+)\"").find(text)?.groupValues?.get(1) ?: ""
+        val dir = out.get().asFile.apply { mkdirs() }
+        File(dir, "firebase.properties").writeText("apiKey=${pick("current_key")}\nprojectId=${pick("project_id")}\n")
+    }
+}
+
 sourceSets {
     main {
+        resources.srcDir(files(layout.buildDirectory.dir("generated/firebase")).builtBy(firebaseProps))
         kotlin.srcDir("../shared/src/main/kotlin")
         kotlin.srcDir("../shared/src/compose/kotlin")
         resources.srcDir("../android/src/main/assets")

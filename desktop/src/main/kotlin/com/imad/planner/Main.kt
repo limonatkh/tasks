@@ -66,18 +66,22 @@ class Desk(
 fun main(args: Array<String>) = application {
     val store = remember { MemoryStore() }
     val platform = remember { DesktopPlatform() }
-    val repo = remember { Repository(store, platform).also { Repository.instance = it } }
+    val prefs = remember { FilePrefs(File(platform.filesDir, "sync.json")) }
+    // Changes are noted for the sync only once this computer is paired, and not while its own file is being read.
+    val pending = remember { Pending(prefs) { prefs.get("owner") != null && !Loading.on } }
+    val repo = remember { Repository(TrackingStore(store, pending), platform).also { Repository.instance = it } }
+    val sync = remember { DesktopSync(repo, store, prefs, pending) }
     Window(
         onCloseRequest = ::exitApplication, title = "رحلة اليوم",
         state = rememberWindowState(width = 1440.dp, height = 900.dp),
     ) {
-        App(repo, store, File(platform.filesDir, "data.json"), args.firstOrNull())
+        App(repo, store, sync, File(platform.filesDir, "data.json"), args.firstOrNull())
     }
 }
 
 @OptIn(FlowPreview::class)
 @Composable
-fun App(repo: Repository, store: MemoryStore, dataFile: File, startTab: String? = null) {
+fun App(repo: Repository, store: MemoryStore, sync: DesktopSync?, dataFile: File, startTab: String? = null) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var ready by remember { mutableStateOf(false) }
@@ -85,7 +89,9 @@ fun App(repo: Repository, store: MemoryStore, dataFile: File, startTab: String? 
     // Start: the saved file first, then the same start-up the phone runs (seeds on first use, today's plan).
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
+            Loading.on = true
             if (dataFile.exists()) runCatching { repo.load(dataFile.readText()) }.onFailure { snackbar.showSnackbar("ما قدرت أقرأ ملف البيانات: ${it.message}") }
+            Loading.on = false
             runCatching { repo.initialize() }
             runCatching { repo.refreshDay() }
         }
@@ -95,6 +101,19 @@ fun App(repo: Repository, store: MemoryStore, dataFile: File, startTab: String? 
         // …then every change is written to the file a moment later (one write for a burst of changes).
         store.version.drop(1).debounce(800).collect {
             withContext(Dispatchers.IO) { runCatching { saveAtomically(dataFile, repo.backup()) } }
+        }
+    }
+
+    // Sync with the phone while the app is open: now, then every 20 seconds (only once paired).
+    LaunchedEffect(ready) {
+        if (!ready || sync == null) return@LaunchedEffect
+        while (true) {
+            withContext(Dispatchers.IO) {
+                runCatching { sync.syncNow() }
+                    .onFailure { SyncUi.problem.value = it.message ?: "ما زبط التزامن" }
+                    .onSuccess { if (it != null) SyncUi.problem.value = "" }
+            }
+            delay(20_000)
         }
     }
 
@@ -119,9 +138,11 @@ fun App(repo: Repository, store: MemoryStore, dataFile: File, startTab: String? 
 
     var tab by remember { mutableIntStateOf(startTab?.toIntOrNull() ?: 0) }
     var panelFor by remember { mutableStateOf<Task?>(null) }
-    Shell(desk, repo, act, ready, tab, { tab = it }, panelFor, { panelFor = it }, openBackup) {
+    var syncOpen by remember { mutableStateOf(false) }
+    Shell(desk, repo, act, ready, tab, { tab = it }, panelFor, { panelFor = it }, openBackup, openSync = { syncOpen = true }) {
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(24.dp))
     }
+    if (syncOpen && sync != null) SyncPanel(sync, close = { syncOpen = false })
 }
 
 /** The window's content: theme, right-to-left, the rail, the chosen screen and the task panel. Also used for pictures (Shots.kt). */
@@ -129,6 +150,7 @@ fun App(repo: Repository, store: MemoryStore, dataFile: File, startTab: String? 
 fun Shell(
     desk: Desk, repo: Repository, act: (suspend () -> Unit) -> Unit, ready: Boolean,
     tab: Int, setTab: (Int) -> Unit, panelFor: Task?, setPanel: (Task?) -> Unit, openBackup: () -> Unit,
+    openSync: () -> Unit = {},
     overlay: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {},
 ) {
     PlannerTheme {
@@ -138,7 +160,7 @@ fun Shell(
         ) {
             Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                 Row(Modifier.fillMaxSize()) {
-                    Rail(tab, setTab, openBackup)
+                    Rail(tab, setTab, openBackup, openSync)
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         if (!ready) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Nour(NourMood.Awake, size = 120.dp) }
                         else when (tab) {
@@ -177,7 +199,7 @@ fun chooseBackupFile(): String? {
 
 /** The side rail: the app mark, the four drawn sections, and the backup button at the bottom. */
 @Composable
-fun Rail(selected: Int, select: (Int) -> Unit, openBackup: () -> Unit) {
+fun Rail(selected: Int, select: (Int) -> Unit, openBackup: () -> Unit, openSync: () -> Unit = {}) {
     val labels = listOf("اليوم", "التخطيط", "الأهداف", "المراجعة")
     Column(
         Modifier.width(104.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface).padding(vertical = 20.dp),
@@ -205,6 +227,11 @@ fun Rail(selected: Int, select: (Int) -> Unit, openBackup: () -> Unit) {
         }
         Spacer(Modifier.weight(1f))
         Text(
+            "التزامن", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = openSync)
+                .semantics { role = Role.Button }.padding(8.dp),
+        )
+        Text(
             "فتح نسخة\nمن الجوال", fontSize = 12.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = openBackup)
                 .semantics { role = Role.Button }.padding(8.dp),
@@ -220,3 +247,6 @@ fun NotYet(title: String, text: String) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { NourNote(NourMood.Awake, title, text) }
     }
 }
+
+/** True while the computer reads its own data file at start-up (those writes are not changes to send). */
+object Loading { @Volatile var on = false }

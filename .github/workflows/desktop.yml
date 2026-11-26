@@ -23,6 +23,14 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Firebase config (from the GOOGLE_SERVICES_JSON secret, never in git)
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          [ -n "$GOOGLE_SERVICES_JSON" ] || { echo "::error::GOOGLE_SERVICES_JSON secret is missing"; exit 1; }
+          printf '%s' "$GOOGLE_SERVICES_JSON" > android/google-services.json
+
       - name: Shared tests
         run: gradle :shared:test --console=plain
 

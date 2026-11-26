@@ -1,6 +1,5 @@
 package com.imad.planner
 
-import org.json.JSONObject
 
 /**
  * Sync between the phone and the computer, through one cloud folder per person (Firebase Firestore:
@@ -25,34 +24,29 @@ interface Cloud {
 interface SyncPrefs {
     fun get(key: String): String?
     fun set(key: String, value: String?)
+    /** Every key starting with [prefix], with its value. */
+    fun all(prefix: String): Map<String, String>
 }
 
-/** Changes waiting to be sent: "table|id" → when it changed. Kept in [SyncPrefs] so an app restart loses none. */
-class Pending(private val prefs: SyncPrefs) {
-    private val map = LinkedHashMap<String, Long>()
-    private val lock = Any()
-
-    init {
-        runCatching { JSONObject(prefs.get("pending") ?: "{}").let { o -> o.keys().forEach { k -> map[k] = o.getLong(k) } } }
-    }
-
-    private fun save() = prefs.set("pending", JSONObject(map as Map<*, *>).toString())
-
+/**
+ * Changes waiting to be sent: "table|id" → when it changed, one entry each in [SyncPrefs] (so an app restart loses
+ * none, and noting one change stays cheap with thousands waiting). Nothing is noted while [active] is false
+ * (sync not set up yet); the first sign-in marks everything at once ([markAll]).
+ */
+class Pending(private val prefs: SyncPrefs, private val active: () -> Boolean = { true }) {
     fun mark(table: String, id: String, at: Long = System.currentTimeMillis()) {
+        if (!active()) return
         if (table == Rows.META && Rows.localMeta(id)) return
-        synchronized(lock) { map["$table|$id"] = at; save() }
+        prefs.set("p:$table|$id", at.toString())
     }
 
-    fun snapshot(): Map<String, Long> = synchronized(lock) { LinkedHashMap(map) }
+    fun snapshot(): Map<String, Long> = prefs.all("p:").mapNotNull { (k, v) -> v.toLongOrNull()?.let { k.removePrefix("p:") to it } }.toMap()
 
     /** Forget what was sent, unless it changed again meanwhile. */
-    fun sent(done: Map<String, Long>) = synchronized(lock) {
-        done.forEach { (k, at) -> if (map[k] == at) map.remove(k) }
-        save()
-    }
+    fun sent(done: Map<String, Long>) = done.forEach { (k, at) -> if (prefs.get("p:$k") == at.toString()) prefs.set("p:$k", null) }
 
-    fun clear() = synchronized(lock) { map.clear(); save() }
-    val size get() = synchronized(lock) { map.size }
+    fun clear() = prefs.all("p:").keys.forEach { prefs.set(it, null) }
+    val size get() = prefs.all("p:").size
 }
 
 /**

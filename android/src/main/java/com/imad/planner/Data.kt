@@ -105,6 +105,7 @@ fun Repository.Companion.get(context: Context): Repository =
             val app = context.applicationContext
             val db = Room.databaseBuilder(app, PlannerDb::class.java, "planner-v2.db")
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
-            Repository(db.store(), AndroidPlatform(app, db)).also { instance = it }
+            // Every change is noted for the sync with the computer (only once sync is set up: PhoneSync).
+            Repository(TrackingStore(db.store(), PhoneSync.pending(app)), AndroidPlatform(app, db)).also { instance = it }
         }
     }

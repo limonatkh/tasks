@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// Who may read and write the planner's cloud data (Firebase project time-manager0).
+// - users/<owner>: the person's own folder. <owner> is their Google sign-in on the phone.
+// - A computer signs in as an anonymous device and may use the folder only after the phone added it to "devices"
+//   (pairing with the code the computer shows).
+// - pair/<code>: short-lived pairing notes (the computer's device id, then the owner the phone wrote).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function isDevice(uid) {
+      return signedIn() && request.auth.uid in get(/databases/$(database)/documents/users/$(uid)).data.get('devices', []);
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isDevice(uid);
+      allow write: if isOwner(uid);
+
+      match /rows/{row} {
+        allow read, write: if isOwner(uid) || isDevice(uid);
+      }
+    }
+
+    match /pair/{code} {
+      // The computer creates it with its own id; the phone adds "owner"; nobody else changes the device id.
+      allow create: if signedIn() && request.resource.data.device == request.auth.uid;
+      allow read: if signedIn();
+      allow update: if signedIn() && request.resource.data.device == resource.data.device;
+      allow delete: if signedIn() && resource.data.device == request.auth.uid;
+    }
+  }
+}

@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
+    // Reads android/google-services.json (not in git: CI writes it from the GOOGLE_SERVICES_JSON secret).
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -13,8 +15,8 @@ android {
         applicationId = "com.imad.planner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 37
-        versionName = "0.36"
+        versionCode = 38
+        versionName = "0.37"
     }
 
     // Release APKs come out unsigned here and are signed by scripts/sign.sh in CI with the private key
@@ -61,6 +63,15 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Sync with the computer: Google sign-in and Firestore.
+    implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
