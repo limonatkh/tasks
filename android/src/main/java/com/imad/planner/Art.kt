@@ -235,31 +235,24 @@ fun Nour(mood: NourMood, modifier: Modifier = Modifier, size: Dp = 96.dp, cheer:
 // ---------------- Domains ----------------
 
 /** The kinds of work the drawings know. Custom groups fall back to the task's icon, then to "other". */
-enum class Domain(val color: Color, val pale: Color, val title: String) {
-    Quran(Brand.quran, Color(0xFFD8F2EE), "القرآن"),
-    Reading(Brand.reading, Color(0xFFDDE8FF), "القراءة"),
-    Sport(Brand.sport, Color(0xFFFFE6D6), "الرياضة"),
-    Content(Brand.content, Color(0xFFEDE7FF), "المحتوى"),
-    Work(Color(0xFFB07A10), Color(0xFFFFF0C2), "الشغل"),
-    Other(Color(0xFFC0587A), Color(0xFFF9E1EA), "أخرى"),
+// Domain itself and domainOf() live in shared/ (Domains.kt); only the colours are Android/Compose.
+val Domain.color: Color get() = when (this) {
+    Domain.Quran -> Brand.quran
+    Domain.Reading -> Brand.reading
+    Domain.Sport -> Brand.sport
+    Domain.Content -> Brand.content
+    Domain.Work -> Color(0xFFB07A10)
+    Domain.Other -> Color(0xFFC0587A)
 }
 
-private val contentIcons = setOf("mic", "video", "edit", "publish", "photo", "design")
-
-/** Which domain a task is in: its group first, then the icon chosen for it. */
-fun domainOf(category: String, icon: String?): Domain {
-    val k = icon?.substringAfter(':')
-    return when {
-        category == "quran" || k == "quran" || k == "memorize" -> Domain.Quran
-        category == "sport" || icon?.startsWith("s:") == true || k in setOf("gym", "boxing", "run", "body", "sport") -> Domain.Sport
-        k in contentIcons -> Domain.Content
-        category == "reading" || k in setOf("read", "listen", "learn") -> Domain.Reading
-        category == "work" || k in setOf("code", "work", "game", "write", "search", "idea") -> Domain.Work
-        else -> Domain.Other
-    }
+val Domain.pale: Color get() = when (this) {
+    Domain.Quran -> Color(0xFFD8F2EE)
+    Domain.Reading -> Color(0xFFDDE8FF)
+    Domain.Sport -> Color(0xFFFFE6D6)
+    Domain.Content -> Color(0xFFEDE7FF)
+    Domain.Work -> Color(0xFFFFF0C2)
+    Domain.Other -> Color(0xFFF9E1EA)
 }
-
-fun domainOf(t: Task, s: Settings): Domain = domainOf(t.category, s.icons[seriesOf(t)])
 
 /** The domain's drawing in a 40×40 box (no tile). */
 private fun DrawScope.drawDomain(d: Domain, mono: Boolean) {

@@ -27,7 +27,7 @@ if [ -s old.apk ]; then
   A shell am start -n $P/.MainActivity; shot 01-old-0.25 8
   A shell am force-stop $P
 fi
-A install -r app/build/outputs/apk/release/app-release.apk
+A install -r android/build/outputs/apk/release/app-release.apk
 A shell pm grant $P android.permission.POST_NOTIFICATIONS
 [ -s old.apk ] || unlock
 A logcat -c

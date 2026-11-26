@@ -13,4 +13,10 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "SmartLifePlanner"
+
+// The phone app. Its Gradle name stays ":app" so the APK keeps its name (app-release.apk); the folder is android/.
 include(":app")
+project(":app").projectDir = file("android")
+
+// Logic shared by the phone and the computer: models, scheduling, prayer times, plans, progress. Plain Kotlin, no Android.
+include(":shared")

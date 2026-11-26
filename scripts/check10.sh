@@ -11,7 +11,7 @@ A shell pm disable-user --user 0 com.google.android.apps.nexuslauncher || true
 spot() { A shell uiautomator dump /sdcard/u.xml >/dev/null; A pull /sdcard/u.xml /tmp/u.xml >/dev/null; python3 scripts/find.py /tmp/u.xml "$1"; }
 tap() { local xy; xy=$(spot "$1"); echo "tap $1 -> $xy"; [ -n "$xy" ] && A shell input tap $xy; }
 shot() { sleep "${2:-4}"; A exec-out screencap -p > "shots/$1.png"; }
-ls -la old.apk attack.apk app/build/outputs/apk/release/
+ls -la old.apk attack.apk android/build/outputs/apk/release/
 A install old.apk | tee shots/install-old.txt
 A shell dumpsys package $P | grep -E "versionName|signatures" | tee shots/old-package.txt
 A shell pm grant $P android.permission.POST_NOTIFICATIONS
@@ -24,7 +24,7 @@ tap "desc:علّم"; shot 02-old-one-done 3
 A shell "sqlite3 /data/data/$P/databases/*.db \"select count(*), sum(state='done') from tasks; select count(*) from meta;\"" | tee shots/db-old.txt || true
 A shell am force-stop $P
 # The update.
-A install -r app/build/outputs/apk/release/app-release.apk 2>&1 | tee shots/install-new.txt
+A install -r android/build/outputs/apk/release/app-release.apk 2>&1 | tee shots/install-new.txt
 A shell dumpsys package $P | grep -E "versionName|signatures|pastSigs|signing" | tee shots/new-package.txt
 A shell pm grant $P android.permission.POST_NOTIFICATIONS
 A shell "sqlite3 /data/data/$P/databases/*.db \"select count(*), sum(state='done') from tasks; select count(*) from meta;\"" | tee shots/db-new.txt || true

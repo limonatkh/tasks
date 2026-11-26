@@ -343,7 +343,6 @@ fun digits(s: String): String = s.map { c ->
     }
 }.joinToString("")
 
-fun num(d: Double): String = if (d == Math.floor(d)) d.toLong().toString() else String.format(Locale.US, "%.1f", d)
 
 fun dayLabel(d: LocalDate): String = d.format(DateTimeFormatter.ofPattern("EEEE، d MMMM", Locale("ar")))
 

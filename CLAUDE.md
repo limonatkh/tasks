@@ -23,15 +23,21 @@ They hold the decisions, the state, the design tokens and the open questions. Th
 ## Workflow
 
 - Work on a branch; merge to `main` only when the stage works. A push to `main` publishes a release (`build-N`) to the phone.
-- CI (`.github/workflows/build.yml`) runs `gradle testReleaseUnitTest`, then `assembleRelease`, then signs. There is no Gradle wrapper; CI uses Gradle 8.9 and JDK 17.
-- Emulator checks run in CI via `.github/workflows/screens.yml` (input: a script from `scripts/`).
-- This laptop: JDK 17 is installed; the Android SDK has only `cmdline-tools` (no platform-tools, no emulator, no Gradle) as of 2026-11-26.
+- CI (`.github/workflows/build.yml`) runs `gradle testReleaseUnitTest :shared:test`, then `assembleRelease`, then signs. There is no Gradle wrapper; CI uses Gradle 8.9 and JDK 17.
+- Emulator checks run in CI via `.github/workflows/screens.yml` (inputs: a script from `scripts/`, and `old` = the release installed first). `check11.sh` with `old=build-74` checks 0.34 → 0.35.
+- This laptop: JDK 17 is installed; the Android SDK has only `cmdline-tools` (no platform-tools, no emulator, no Gradle) as of 2026-11-26, and services.gradle.org is not reachable from the sandbox. Build in CI.
 
-## Code map (`app/src/main/java/com/imad/planner/`)
+## Folders
 
-- Logic without Android imports (candidates for a shared module): `Scheduler`, `PlanMath`, `Progress`, `Prayer`, `Targets`, `Extras`, `Projection`, `PlansJson`.
-- `Data.kt`: Room entities, DAO, `Repository`, `Settings`. `Ui.kt` / `Art.kt`: theme tokens and all drawings. `MainActivity.kt`: shell, Today, lock.
-- Tests: `app/src/test/java/com/imad/planner/` (must stay green).
+- `android/`: the phone app (Gradle name still `:app`, so the APK is still `app-release.apk`). Package `com.imad.planner`.
+  - `Data.kt`: Room DAO, database, migrations, `Repository`. `Ui.kt` / `Art.kt`: theme tokens, drawings, domain colours. `MainActivity.kt`: shell, Today, lock.
+  - Tests that need Android-side code: `AlarmEventsTest`, `ExtrasTest`.
+- `shared/`: plain Kotlin (JVM), no Android. Used by the phone now and by the computer app later. Same package.
+  - `Models.kt` (entities with Room annotations from `room-common` only, `Settings`, `Groups`, `Clock`, `Maths`, `Cat`, `Months`, `QuranLink`, `num`), `Domains.kt`, `Scheduler`, `PlanMath`, `Progress`, `Prayer`, `Targets`, `Extras`, `Projection`, `PlansJson`.
+  - `org.json` is `compileOnly` here (Android has it built in); the computer app must add it.
+  - Tests: `gradle :shared:test`.
+- `desktop/`: the Windows app (not started).
+- Any change to an entity changes the database: CI compares Room's schema hash with `main` and fails if it changed without a migration.
 
 ## Next work (see HANDOFF §7)
 

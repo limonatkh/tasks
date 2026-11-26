@@ -19,7 +19,7 @@ shot() { sleep "${2:-4}"; nowait; A exec-out screencap -p > "shots/$1.png"; }
 go() { A shell am start -S -n $P/.MainActivity --es open "$1"; }
 rec() { A shell screenrecord --time-limit "$2" /sdcard/$1.mp4 & }
 pullrec() { sleep 2; A pull /sdcard/$1.mp4 shots/$1.mp4 || true; }
-A install -r app/build/outputs/apk/release/app-release.apk
+A install -r android/build/outputs/apk/release/app-release.apk
 A shell pm grant $P android.permission.POST_NOTIFICATIONS
 A shell am start -n $P/.MainActivity; sleep 8; shot 00-lock 2; A shell am force-stop $P
 printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <boolean name="unlocked" value="true" />\n</map>\n' > /tmp/lock.xml

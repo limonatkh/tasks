@@ -3,7 +3,7 @@
 set -x
 mkdir -p shots
 P=com.imad.planner
-adb install -r app/build/outputs/apk/release/app-release.apk
+adb install -r android/build/outputs/apk/release/app-release.apk
 adb shell pm grant $P android.permission.POST_NOTIFICATIONS || true
 adb root; sleep 3
 # Past the one-time password screen.

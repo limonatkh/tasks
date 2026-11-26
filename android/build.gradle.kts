@@ -13,8 +13,8 @@ android {
         applicationId = "com.imad.planner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 35
-        versionName = "0.34"
+        versionCode = 36
+        versionName = "0.35"
     }
 
     // Release APKs come out unsigned here and are signed by scripts/sign.sh in CI with the private key
@@ -38,6 +38,7 @@ android {
 
 dependencies {
     val bom = platform("androidx.compose:compose-bom:2024.09.03")
+    implementation(project(":shared"))
     implementation(bom)
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.2")

@@ -5,7 +5,7 @@ exec > >(tee shots/run.log) 2>&1
 set -x
 P=com.imad.planner
 A() { timeout 25 adb "$@"; }
-A install -r app/build/outputs/apk/release/app-release.apk
+A install -r android/build/outputs/apk/release/app-release.apk
 A shell pm grant $P android.permission.POST_NOTIFICATIONS || true
 A root; sleep 3
 A shell am start -n $P/.MainActivity; sleep 6; A shell am force-stop $P

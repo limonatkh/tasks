@@ -6,6 +6,9 @@ on:
       script:
         description: "Script in scripts/ to run on the emulator"
         default: "screens.sh"
+      old:
+        description: "Release whose APK is installed first, to check the update (check10: build-68 = 0.33)"
+        default: "build-68"
 
 permissions:
   contents: write
@@ -34,7 +37,7 @@ jobs:
       - name: Previous release (to check the upgrade)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download build-68 -p Smart-Life-Planner.apk -O old.apk -R ${{ github.repository }} || true
+        run: gh release download ${{ inputs.old }} -p Smart-Life-Planner.apk -O old.apk -R ${{ github.repository }} || true
       - name: Run on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:

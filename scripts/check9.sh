@@ -11,7 +11,7 @@ A shell pm disable-user --user 0 com.google.android.apps.nexuslauncher || true
 spot() { A shell uiautomator dump /sdcard/u.xml >/dev/null; A pull /sdcard/u.xml /tmp/u.xml >/dev/null; python3 scripts/find.py /tmp/u.xml "$1"; }
 tap() { local xy; xy=$(spot "$1"); echo "tap $1 -> $xy"; [ -n "$xy" ] && A shell input tap $xy; }
 shot() { sleep "${2:-4}"; A exec-out screencap -p > "shots/$1.png"; }
-A install -r app/build/outputs/apk/release/app-release.apk
+A install -r android/build/outputs/apk/release/app-release.apk
 A shell am start -n $P/.IgFocusActivity; shot 01-open-login 12
 tap "text:حساباتي"; shot 02-mine-empty 3
 tap "text:رابط الحساب أو اسمه"; sleep 1; A shell input text "https://www.instagram.com/natgeo/"; sleep 1; A shell input keyevent 111; sleep 1

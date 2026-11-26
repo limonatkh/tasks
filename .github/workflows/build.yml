@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-java@v4
         with:
@@ -27,13 +29,27 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          gradle testReleaseUnitTest --console=plain 2>&1 | tee build.log
+          gradle testReleaseUnitTest :shared:test --console=plain 2>&1 | tee build.log
 
       - name: Build release APK
         shell: bash
         run: |
           set -o pipefail
           gradle assembleRelease --console=plain 2>&1 | tee -a build.log
+
+      - name: Phone database shape unchanged (vs main)
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          # Room writes a hash of the whole database shape into the generated code. If it differs from main while the
+          # version number (6) is the same, installed phones would refuse to open their data. Stop here if so.
+          hash() { grep -rhoE '"[0-9a-f]{32}"' "$1" | sort -u | xargs; }
+          NEW=$(hash android/build/generated/ksp/release)
+          git worktree add -q /tmp/base origin/main
+          (cd /tmp/base && gradle :app:kspReleaseKotlin --console=plain -q)
+          OLD=$(hash /tmp/base/app/build/generated/ksp/release 2>/dev/null || hash /tmp/base/android/build/generated/ksp/release)
+          echo "main: $OLD"; echo "this: $NEW"
+          [ -n "$NEW" ] && [ "$NEW" = "$OLD" ] || { echo "::error::Room schema hash changed: $OLD -> $NEW"; exit 1; }
 
       - name: Sign
         env:
@@ -52,7 +68,7 @@ jobs:
           done
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk Smart-Life-Planner.apk
+        run: cp android/build/outputs/apk/release/app-release.apk Smart-Life-Planner.apk
 
       - uses: actions/upload-artifact@v4
         with:
@@ -64,7 +80,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-report
-          path: app/build/reports/tests/
+          path: |
+            android/build/reports/tests/
+            shared/build/reports/tests/
 
       - name: Publish release
         if: github.ref == 'refs/heads/main'

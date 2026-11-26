@@ -16,7 +16,7 @@ nowait() { local w; w=$(spot "text:Wait"); [ -n "$w" ] && A shell input tap $w &
 tap() { nowait; local xy; xy=$(spot "$1"); echo "tap $1 -> $xy"; [ -n "$xy" ] && A shell input tap $xy; }
 shot() { sleep "${2:-4}"; A exec-out screencap -p > "shots/$1.png"; }
 go() { A shell am start -S -n $P/.MainActivity --es open "$1"; }
-A install -r app/build/outputs/apk/release/app-release.apk
+A install -r android/build/outputs/apk/release/app-release.apk
 A shell pm grant $P android.permission.POST_NOTIFICATIONS
 A shell am start -n $P/.MainActivity; sleep 6; A shell am force-stop $P
 printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <boolean name="unlocked" value="true" />\n</map>\n' > /tmp/lock.xml

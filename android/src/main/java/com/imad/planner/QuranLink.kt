@@ -43,8 +43,6 @@ object QuranContract {
     fun modeName(m: String) = when (m) { "memorize" -> "حفظ"; "review" -> "مراجعة"; else -> "قراءة" }
 }
 
-/** A task series linked to a ward. The name is for display only; the id is what keeps the link. */
-data class QuranLink(val mode: String, val wardId: String, val wardName: String, val missing: Boolean = false)
 
 data class Ward(val id: String, val name: String, val mode: String)
 

@@ -3,11 +3,11 @@
 # (APK signature scheme v3 key rotation). Phones with the app already installed take it as a normal update;
 # after that, an APK signed only with the old key is refused as an update.
 #   needs: PLANNER_KS_PASS (secret) — opens signing/planner-2026.p12.enc and the key inside it.
-#   in:  app/build/outputs/apk/release/app-release-unsigned.apk
-#   out: app/build/outputs/apk/release/app-release.apk   (+ attack.apk when MAKE_ATTACK=1, for the emulator check)
+#   in:  android/build/outputs/apk/release/app-release-unsigned.apk
+#   out: android/build/outputs/apk/release/app-release.apk   (+ attack.apk when MAKE_ATTACK=1, for the emulator check)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT=app/build/outputs/apk/release
+OUT=android/build/outputs/apk/release
 BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 if [ -z "${PLANNER_KS_PASS:-}" ]; then
