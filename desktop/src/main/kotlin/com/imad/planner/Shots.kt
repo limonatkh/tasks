@@ -15,7 +15,7 @@ import java.nio.file.Files
 fun main(args: Array<String>) {
     val out = File(args.getOrElse(0) { "build/shots" }).apply { mkdirs() }
     val tmp = Files.createTempDirectory("planner-shots").toFile()
-    val store = DesktopStore()
+    val store = MemoryStore()
     val base = DesktopPlatform()
     val platform = object : Platform by base { override val filesDir: File = tmp }
     val repo = Repository(store, platform).also { Repository.instance = it }

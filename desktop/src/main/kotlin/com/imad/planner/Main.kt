@@ -64,7 +64,7 @@ class Desk(
 }
 
 fun main(args: Array<String>) = application {
-    val store = remember { DesktopStore() }
+    val store = remember { MemoryStore() }
     val platform = remember { DesktopPlatform() }
     val repo = remember { Repository(store, platform).also { Repository.instance = it } }
     Window(
@@ -77,7 +77,7 @@ fun main(args: Array<String>) = application {
 
 @OptIn(FlowPreview::class)
 @Composable
-fun App(repo: Repository, store: DesktopStore, dataFile: File, startTab: String? = null) {
+fun App(repo: Repository, store: MemoryStore, dataFile: File, startTab: String? = null) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var ready by remember { mutableStateOf(false) }

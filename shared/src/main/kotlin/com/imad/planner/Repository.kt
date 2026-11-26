@@ -33,6 +33,9 @@ class Repository(val store: Store, val platform: Platform) {
      */
     private suspend fun <T> locked(block: suspend () -> T): T = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { lock.withLock { block() } }
 
+    /** Runs [block] while no other change can run (the sync uses it to write rows that came from the other device). */
+    suspend fun exclusive(block: suspend () -> Unit) = locked { block() }
+
     private suspend fun settingsLocked(): Settings = Settings.from(Settings.KEYS.mapNotNull { k -> store.meta(k)?.let { k to it } }.toMap())
 
     suspend fun setSetting(key: String, value: String) = locked {

@@ -6,11 +6,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 
 /**
- * The computer's [Store]: the same tables as the phone's Room database, kept in memory. Every change bumps
- * [version]; the app then writes the whole data file (see [DesktopPlatform] and Main.kt), so nothing is lost on exit.
- * Sort orders match the phone's queries.
+ * A [Store] kept in memory, with the same tables and sort orders as the phone's Room database (the computer uses it,
+ * and the tests). Every change bumps
+ * [version]; the computer then writes its whole data file (desktop Main.kt), so nothing is lost on exit.
  */
-class DesktopStore : Store {
+class MemoryStore : Store {
     private val lock = Any()
     private val tasks = LinkedHashMap<String, Task>()
     private val goals = LinkedHashMap<String, Goal>()
