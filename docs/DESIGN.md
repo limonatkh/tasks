@@ -2,7 +2,7 @@
 
 The approved look of the app (approved by the user in the claude.ai session; see `HANDOFF.md` §2). The values below
 are the ones in the code (`Ui.kt`, `Art.kt`). The design board itself is a claude.ai artifact named
-«لوحة هوية رحلة اليوم» and is **not** in this repository.
+«لوحة هوية رحلة اليوم» and is copied into [`design-board/`](design-board/README.md) as HTML (source) and PNG (pictures): build on those.
 
 **Desktop: no design exists yet.** Nothing was drawn or decided for the laptop screens. It must be designed, from these
 rules, and shown to the user for approval before it is built.
