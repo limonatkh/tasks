@@ -32,7 +32,7 @@ They hold the decisions, the state, the design tokens and the open questions. Th
 - `android/`: the phone app (Gradle name still `:app`, so the APK is still `app-release.apk`). Package `com.imad.planner`.
   - `Data.kt`: Room DAO, database, migrations, `Repository`. `Ui.kt` / `Art.kt`: theme tokens, drawings, domain colours. `MainActivity.kt`: shell, Today, lock.
   - Tests that need Android-side code: `AlarmEventsTest`, `ExtrasTest`.
-- `shared/`: plain Kotlin (JVM), no Android. Used by the phone now and by the computer app later. Same package.
+- `shared/`: plain Kotlin (JVM), no Android. Same package. The phone compiles these files into itself (`srcDir` in `android/build.gradle.kts`), not as a library, because Kotlin won't smart-cast another module's properties.
   - `Models.kt` (entities with Room annotations from `room-common` only, `Settings`, `Groups`, `Clock`, `Maths`, `Cat`, `Months`, `QuranLink`, `num`), `Domains.kt`, `Scheduler`, `PlanMath`, `Progress`, `Prayer`, `Targets`, `Extras`, `Projection`, `PlansJson`.
   - `org.json` is `compileOnly` here (Android has it built in); the computer app must add it.
   - Tests: `gradle :shared:test`.

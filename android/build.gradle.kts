@@ -34,11 +34,16 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     testOptions { unitTests.isReturnDefaultValues = true }
+
+    // The shared logic (../shared) is compiled as part of the phone app, not as a library: Kotlin does not smart-cast
+    // another module's public properties, and the phone code relies on that. The same files, unchanged, also build
+    // on their own as :shared (with its own tests) and will be used by the computer app.
+    sourceSets { getByName("main").java.srcDir("../shared/src/main/kotlin") }
 }
 
 dependencies {
     val bom = platform("androidx.compose:compose-bom:2024.09.03")
-    implementation(project(":shared"))
+    implementation("androidx.room:room-common:2.6.1")
     implementation(bom)
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.2")
