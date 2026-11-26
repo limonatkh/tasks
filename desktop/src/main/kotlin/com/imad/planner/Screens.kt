@@ -239,7 +239,7 @@ fun WeekScreen(d: Desk, repo: Repository, act: (suspend () -> Unit) -> Unit, ope
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(shortDay(day), fontFamily = DisplayFont, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = if (today) Brand.sky else Ink)
+                            Text(day.format(java.time.format.DateTimeFormatter.ofPattern("EEEE", java.util.Locale("ar"))), fontFamily = DisplayFont, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = if (today) Brand.sky else Ink)
                             Text("${day.dayOfMonth}", fontSize = 13.sp, color = Muted)
                         }
                         Bar((planned.toFloat() / free).coerceIn(0f, 1f), onBand = false)
