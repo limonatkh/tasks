@@ -13,8 +13,8 @@ android {
         applicationId = "com.imad.planner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 36
-        versionName = "0.35"
+        versionCode = 37
+        versionName = "0.36"
     }
 
     // Release APKs come out unsigned here and are signed by scripts/sign.sh in CI with the private key
@@ -38,7 +38,11 @@ android {
     // The shared logic (../shared) is compiled as part of the phone app, not as a library: Kotlin does not smart-cast
     // another module's public properties, and the phone code relies on that. The same files, unchanged, also build
     // on their own as :shared (with its own tests) and will be used by the computer app.
-    sourceSets { getByName("main").java.srcDir("../shared/src/main/kotlin") }
+    sourceSets {
+        getByName("main").java.srcDir("../shared/src/main/kotlin")
+        // The theme and drawings, shared with the computer app.
+        getByName("main").java.srcDir("../shared/src/compose/kotlin")
+    }
 }
 
 dependencies {

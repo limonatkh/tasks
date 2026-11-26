@@ -152,10 +152,7 @@ val LocalThemeChoice = androidx.compose.runtime.staticCompositionLocalOf { Theme
 /** True when animations should be skipped: the phone's "remove animations" or the app's own "حركة أقل". */
 @Composable
 fun calmMotion(): Boolean {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val system = androidx.compose.runtime.remember {
-        runCatching { android.provider.Settings.Global.getFloat(context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) }.getOrDefault(1f) == 0f
-    }
+    val system = systemCalmMotion()
     return system || LocalThemeChoice.current.calm
 }
 
@@ -254,24 +251,7 @@ private fun journeyColors(dark: Boolean) = if (dark) darkColorScheme(
     error = Color(0xFFB3261E), onError = Color.White,
 )
 
-/** Rounded happy Arabic for titles and big numbers. */
-val DisplayFont = androidx.compose.ui.text.font.FontFamily(
-    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.Bold),
-    androidx.compose.ui.text.font.Font(R.font.baloo_extrabold, FontWeight.ExtraBold),
-    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.SemiBold),
-    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.Medium),
-    androidx.compose.ui.text.font.Font(R.font.baloo_bold, FontWeight.Normal),
-)
-
-/** Clear Arabic for everything people read. */
-val BodyFont = androidx.compose.ui.text.font.FontFamily(
-    androidx.compose.ui.text.font.Font(R.font.plex_regular, FontWeight.Normal),
-    androidx.compose.ui.text.font.Font(R.font.plex_regular, FontWeight.Light),
-    androidx.compose.ui.text.font.Font(R.font.plex_semibold, FontWeight.Medium),
-    androidx.compose.ui.text.font.Font(R.font.plex_semibold, FontWeight.SemiBold),
-    androidx.compose.ui.text.font.Font(R.font.plex_bold, FontWeight.Bold),
-    androidx.compose.ui.text.font.Font(R.font.plex_bold, FontWeight.ExtraBold),
-)
+// DisplayFont and BodyFont are defined per platform (Android: PlatformUi.kt), where the font files are.
 
 private fun journeyType(): Typography {
     val b = Typography()
@@ -563,46 +543,7 @@ fun TimeDialog(initial: Int, close: () -> Unit, pick: (Int) -> Unit) {
     )
 }
 
-/**
- * A card that comes up from the bottom (260 ms, eases in), the page behind dims. Back or the × closes it.
- * Used for every sheet in the app, so they all open and close the same way.
- */
-@Composable
-fun Sheet(title: String, close: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    val calm = calmMotion()
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-            val shown = remember { androidx.compose.animation.core.MutableTransitionState(calm) }.apply { targetState = true }
-            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = close)
-                .statusBarsPadding(), contentAlignment = Alignment.BottomCenter) {
-                val cap = maxHeight * 0.94f
-                androidx.compose.animation.AnimatedVisibility(
-                    visibleState = shown,
-                    enter = androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(260, easing = androidx.compose.animation.core.FastOutSlowInEasing)) { it / 2 } +
-                        androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)),
-                ) {
-                    Column(
-                        Modifier.fillMaxWidth().heightIn(max = cap)
-                            .background(MaterialTheme.colorScheme.background, RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
-                            .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) {}
-                            .navigationBarsPadding().imePadding(),
-                    ) {
-                        CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
-                        Box(Modifier.fillMaxWidth().padding(top = 4.dp, start = 6.dp, end = 6.dp)) {
-                            Box(Modifier.align(Alignment.Center).width(44.dp).heightIn(min = 5.dp, max = 5.dp).background(MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(3.dp)))
-                            IconButton(onClick = close, modifier = Modifier.align(Alignment.CenterEnd)) { Icon(Icons.Filled.Close, contentDescription = "إغلاق") }
-                        }
-                        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (title.isNotBlank()) Text(title, style = MaterialTheme.typography.titleLarge)
-                            content()
-                        }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// Sheet() is defined per platform: a bottom sheet on the phone (PlatformUi.kt), a side panel on the computer.
 
 // ---------------- Task icons ----------------
 
@@ -674,4 +615,18 @@ fun IconPicker(selected: String?, color: Color?, pick: (String) -> Unit) {
         }
     }
     Field(abbr, "أو اختصار (حرفين أو ثلاثة)", { v -> abbr = v.take(4); if (abbr.isNotBlank()) pick("t:" + abbr.trim()) })
+}
+
+/** One colour per prayer period, so each part of the day reads as its own block while scrolling. */
+@Composable
+fun periodAccent(key: String): Color {
+    if (LocalThemeChoice.current.mono) return when (key) { "fajr", "asr", "isha" -> Color(0xFF8A8A8A); else -> Color(0xFF4A4A4A) }
+    return when (key) {
+        "fajr" -> Color(0xFF5B6BC0)
+        "dhuhr" -> Color(0xFFE0A030)
+        "asr" -> Color(0xFFDB7A3C)
+        "maghrib" -> Color(0xFFC0587A)
+        "isha" -> Color(0xFF3B4A8C)
+        else -> MaterialTheme.colorScheme.outline
+    }
 }

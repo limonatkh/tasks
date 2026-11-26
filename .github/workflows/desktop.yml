@@ -1,0 +1,54 @@
+name: Windows app
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Shared tests
+        run: gradle :shared:test --console=plain
+
+      - name: Pictures of the screens
+        run: gradle :desktop:shots --console=plain
+
+      - name: Windows installer
+        run: gradle :desktop:packageMsi --console=plain
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-shots
+          path: desktop/build/shots/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Smart-Life-Planner-Windows
+          path: desktop/build/compose/binaries/main/msi/*.msi
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-${{ github.run_number }}
+          name: Smart Life Planner for Windows ${{ github.run_number }}
+          prerelease: true
+          make_latest: false
+          files: desktop/build/compose/binaries/main/msi/*.msi

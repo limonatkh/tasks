@@ -762,19 +762,7 @@ fun statusColor(t: Task, periodOver: Boolean): Color? = when {
     else -> null
 }
 
-/** One colour per prayer period, so each part of the day reads as its own block while scrolling. */
-@Composable
-fun periodAccent(key: String): Color {
-    if (LocalThemeChoice.current.mono) return when (key) { "fajr", "asr", "isha" -> Color(0xFF8A8A8A); else -> Color(0xFF4A4A4A) }
-    return when (key) {
-        "fajr" -> Color(0xFF5B6BC0)
-        "dhuhr" -> Color(0xFFE0A030)
-        "asr" -> Color(0xFFDB7A3C)
-        "maghrib" -> Color(0xFFC0587A)
-        "isha" -> Color(0xFF3B4A8C)
-        else -> MaterialTheme.colorScheme.outline
-    }
-}
+// periodAccent() is in shared/src/compose (Ui.kt).
 
 /** How the day's tasks are shown: by prayer periods, or all in one plain list. Kept on the phone. */
 object TodayView {

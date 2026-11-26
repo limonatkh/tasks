@@ -20,3 +20,6 @@ project(":app").projectDir = file("android")
 
 // Logic shared by the phone and the computer: models, scheduling, prayer times, plans, progress. Plain Kotlin, no Android.
 include(":shared")
+
+// The Windows app (Compose Desktop). It compiles shared/ the same way the phone does.
+include(":desktop")

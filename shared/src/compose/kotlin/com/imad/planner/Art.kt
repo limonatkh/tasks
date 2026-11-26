@@ -727,3 +727,11 @@ fun Segmented(labels: List<String>, selected: Int, modifier: Modifier = Modifier
     }
 }
 
+
+/** One of the four drawn navigation icons on its own (the computer's side rail). */
+@Composable
+fun NavIcon(index: Int, on: Boolean, size: Dp = 30.dp) {
+    val mono = LocalThemeChoice.current.mono
+    val dim = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(Modifier.size(size)) { art(40f, 40f) { drawNav(index, on, mono, dim) } }
+}
