@@ -4,6 +4,8 @@ Written at the end of a long claude.ai session, for the next agent working on th
 Everything here comes from that session and from the code at commit `354a43a`. Where a fact was not
 checked, it says **(غير مؤكد)** (not confirmed). This file holds no passwords and no keys.
 
+Design rules, tokens, drawing rules and motion timings are in `docs/DESIGN.md`.
+
 The user writes Palestinian Arabic. Answer in Palestinian Arabic. Code, comments and commit messages are in English.
 
 ---
