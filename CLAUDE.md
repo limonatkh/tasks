@@ -41,4 +41,4 @@ They hold the decisions, the state, the design tokens and the open questions. Th
 
 ## Next work (see HANDOFF §7)
 
-The laptop (Windows) version that does everything the phone does and syncs with it. Still open: Windows app vs website, Firebase project, sync conflict rule, and the desktop design (must be mocked up and approved before any code).
+The laptop (Windows) version that does everything the phone does and syncs with it. Decided 2026-11-26: a Windows app (user: «أريحلي تطبيق مستقل»), same repo, folders android/ + desktop/ + shared/. Still open: Firebase project, sync conflict rule, and the desktop design (must be mocked up and approved before any code).
