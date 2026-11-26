@@ -1,6 +1,7 @@
 #!/bin/bash
-# 0.35 folders split (android/ + shared/): 0.34 installed with some data → 0.35 installs over it as an update, the data
-# is still there and every main screen opens without a crash → an APK signed only with the old key is still refused.
+# 0.36 (Repository and the theme shared with the computer app): the previous release installed with some data →
+# this build installs over it as an update, the data is still there and every main screen opens without a crash →
+# an APK signed only with the old key is still refused.
 mkdir -p shots
 exec > >(tee shots/run.log) 2>&1
 set -x
