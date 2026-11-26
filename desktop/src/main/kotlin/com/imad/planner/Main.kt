@@ -90,7 +90,9 @@ fun App(repo: Repository, store: DesktopStore, dataFile: File, startTab: String?
             runCatching { repo.refreshDay() }
         }
         ready = true
-        // Every change is written to the file a moment later (one write for a burst of changes).
+        // The start-up itself changed things (seeds, today's plan): write them once now…
+        withContext(Dispatchers.IO) { runCatching { saveAtomically(dataFile, repo.backup()) } }
+        // …then every change is written to the file a moment later (one write for a burst of changes).
         store.version.drop(1).debounce(800).collect {
             withContext(Dispatchers.IO) { runCatching { saveAtomically(dataFile, repo.backup()) } }
         }
