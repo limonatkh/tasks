@@ -5,7 +5,7 @@ import java.io.File
 /**
  * The computer's side of [Platform].
  * - Files live in %APPDATA%\SmartLifePlanner (data.json, undo and safety copies).
- * - Alarms and the widget are not on the computer yet (Windows notifications come in a later step).
+ * - Alarms become Windows notifications while the app is open (Notifier); there is no widget.
  * - The Quran app and Instagram's signed-in page exist only on the phone.
  */
 class DesktopPlatform : Platform {
@@ -19,7 +19,8 @@ class DesktopPlatform : Platform {
     override suspend fun <T> transaction(block: suspend () -> T): T = block()
 
     override fun pomoAlarm(end: Long) {}
-    override fun rescheduleAlarms(tasks: List<Task>, settings: Settings) {}
+    /** The computer has no alarm clock: a Windows notification shows when a task's time comes (MoreScreens.kt). */
+    override fun rescheduleAlarms(tasks: List<Task>, settings: Settings) = Notifier.update(tasks, settings)
     override fun updateWidget(todays: List<Task>, settings: Settings) {}
 
     override fun quranReport(day: String): Pair<QuranState, QuranReport?> = QuranState.NOT_INSTALLED to null

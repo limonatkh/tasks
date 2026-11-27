@@ -89,7 +89,10 @@ fun TodayScreen(d: Desk, repo: Repository, act: (suspend () -> Unit) -> Unit, op
     val sum = remember(d.tasks, d.goals, d.logs) { Progress.summary(d.tasks, d.goals, d.logs, s, d.today, d.now) }
 
     Column(Modifier.fillMaxSize()) {
-        PageHeader("اليوم", dayLabel(d.today), actions = { LevelChip(sum.total) {} }) {
+        PageHeader("اليوم", dayLabel(d.today), actions = {
+            if (d.meta["xp"] != "0") LevelChip(sum.total) {}
+            HeaderButton("مهمة جديدة", { DeskNav.creating.value = true }) { Text("+", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold) }
+        }) {
             DayArc(periods, minute, line, Modifier.fillMaxWidth().padding(horizontal = 24.dp))
         }
         Row(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -377,8 +380,8 @@ fun TaskPanel(t: Task, d: Desk, repo: Repository, act: (suspend () -> Unit) -> U
                 Tile("بكرا", Modifier.weight(1f)) { act { repo.moveToDay(t.id, LocalDate.parse(t.day).plusDays(1)) }; close() }
                 Tile("لوقت بعدين", Modifier.weight(1f)) { act { repo.deferTask(t.id, "later") }; close() }
                 Tile("تكرار", Modifier.weight(1f)) { act { repo.duplicate(t.id) }; close() }
+                Tile("تعديل", Modifier.weight(1f)) { DeskNav.editor.value = t; close() }
             }
-            Text("التعديل الكامل والملاحظات جايين بالخطوة الجاية من نسخة الكمبيوتر.", fontSize = 13.sp, color = Muted)
         } else {
             Text(if (t.state == "done") "خلصت هالمهمة." else "هالمهمة متخطّاة.", color = Muted)
             TextButton(onClick = { act { repo.reopen(t.id) } }) { Text("رجّعها مفتوحة") }

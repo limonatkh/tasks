@@ -57,7 +57,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
             packageName = "SmartLifePlanner"
-            packageVersion = "1.0.0"
+            packageVersion = "1.1.0"
             description = "رحلة اليوم"
             vendor = "Smart Life Planner"
             windows {

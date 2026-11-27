@@ -71,6 +71,7 @@ fun main(args: Array<String>) = application {
     val pending = remember { Pending(prefs) { prefs.get("owner") != null && !Loading.on } }
     val repo = remember { Repository(TrackingStore(store, pending), platform).also { Repository.instance = it } }
     val sync = remember { DesktopSync(repo, store, prefs, pending) }
+    remember { Notifier.start() }
     Window(
         onCloseRequest = ::exitApplication, title = "رحلة اليوم",
         state = rememberWindowState(width = 1440.dp, height = 900.dp),
@@ -156,7 +157,7 @@ fun Shell(
     PlannerTheme {
         CompositionLocalProvider(
             LocalLayoutDirection provides LayoutDirection.Rtl,
-            LocalThemeChoice provides ThemeChoice(mono = false, set = {}, calm = desk.meta["calm"] == "1"),
+            LocalThemeChoice provides ThemeChoice(mono = false, set = {}, calm = desk.meta["deskCalm"] == "1"),
         ) {
             Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                 Row(Modifier.fillMaxSize()) {
@@ -167,7 +168,7 @@ fun Shell(
                             0 -> TodayScreen(desk, repo, act, open = { setPanel(it) })
                             1 -> WeekScreen(desk, repo, act, open = { setPanel(it) })
                             2 -> GoalsScreen(desk)
-                            else -> NotYet("المراجعة", "شاشة المراجعة جاية بالخطوة الجاية من نسخة الكمبيوتر.")
+                            else -> ReviewScreen(desk, act)
                         }
                     }
                 }
@@ -177,6 +178,9 @@ fun Shell(
                 val t = desk.tasks.firstOrNull { it.id == t0.id } ?: t0
                 TaskPanel(t, desk, repo, act, close = { setPanel(null) })
             }
+            DeskNav.editor.value?.let { t -> TaskEditor(desk.tasks.firstOrNull { it.id == t.id } ?: t, desk, act) { DeskNav.editor.value = null } }
+            if (DeskNav.creating.value) TaskEditor(null, desk, act) { DeskNav.creating.value = false }
+            if (DeskNav.settings.value) SettingsPanel(desk, act) { DeskNav.settings.value = false }
         }
     }
 }
@@ -227,6 +231,11 @@ fun Rail(selected: Int, select: (Int) -> Unit, openBackup: () -> Unit, openSync:
         }
         Spacer(Modifier.weight(1f))
         Text(
+            "الإعدادات", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { DeskNav.settings.value = true }
+                .semantics { role = Role.Button }.padding(8.dp),
+        )
+        Text(
             "التزامن", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = openSync)
                 .semantics { role = Role.Button }.padding(8.dp),
@@ -250,3 +259,10 @@ fun NotYet(title: String, text: String) {
 
 /** True while the computer reads its own data file at start-up (those writes are not changes to send). */
 object Loading { @Volatile var on = false }
+
+/** Sheets any screen can open: add a task, edit one, the settings. */
+object DeskNav {
+    val editor = androidx.compose.runtime.mutableStateOf<Task?>(null)
+    val creating = androidx.compose.runtime.mutableStateOf(false)
+    val settings = androidx.compose.runtime.mutableStateOf(false)
+}

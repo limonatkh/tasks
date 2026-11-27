@@ -59,5 +59,7 @@ fun main(args: Array<String>) {
     shot("3-goals", 2)
     shot("4-task-panel", 0, firstOpen)
     shot("5-review", 3)
+    DeskNav.creating.value = true; shot("6-new-task", 0); DeskNav.creating.value = false
+    DeskNav.settings.value = true; shot("7-settings", 0); DeskNav.settings.value = false
     kotlin.system.exitProcess(0)
 }
