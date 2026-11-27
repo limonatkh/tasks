@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -159,6 +161,7 @@ object DesktopVersion { const val name = "1.1.0" }
 // ---------------------------------------------------------------- Add / edit a task
 
 /** New task ([t] null) or editing one: name, length, day, prayer period and group. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TaskEditor(t: Task?, d: Desk, act: (suspend () -> Unit) -> Unit, close: () -> Unit) {
     val repo = Repository.instance!!
@@ -180,11 +183,11 @@ fun TaskEditor(t: Task?, d: Desk, act: (suspend () -> Unit) -> Unit, close: () -
         }
         if (dayOffset !in 0..2) Muted(dayLabel(day))
         Text("الوقت", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             s.periodsOn(day).forEach { p -> FilterChip(selected = period == p.key, onClick = { period = p.key }, label = { Text(p.name) }) }
         }
         Text("المجموعة", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             s.groups.forEach { g -> FilterChip(selected = group == g.key, onClick = { group = g.key }, label = { Text(g.name) }) }
         }
         Action(if (t == null) "أضف" else "احفظ", {
