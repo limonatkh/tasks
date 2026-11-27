@@ -1,5 +1,5 @@
 #!/bin/bash
-# 0.36 (Repository and the theme shared with the computer app): the previous release installed with some data →
+# 0.36 → 0.37 (sync added; also used for 0.35 → 0.36): the previous release installed with some data →
 # this build installs over it as an update, the data is still there and every main screen opens without a crash →
 # an APK signed only with the old key is still refused.
 mkdir -p shots
@@ -34,4 +34,8 @@ for r in tab:1 tab:2 tab:3 week month goal; do A shell am start -S -n $P/.MainAc
 # The old public key alone must not be able to replace it.
 A install -r attack.apk 2>&1 | tee shots/install-attack.txt
 A shell dumpsys package $P | grep -E "versionName" | tee shots/after-attack.txt
+A logcat -d -b crash > shots/crash.txt
+# 0.37: the sync section at the bottom of Settings (not signed in on the emulator).
+A shell am start -S -n $P/.MainActivity --es open settings; shot 05-settings 6
+for i in 1 2 3 4 5 6; do A shell input swipe 540 2000 540 500 250; sleep 1; done; shot 06-settings-sync 3
 A logcat -d -b crash > shots/crash.txt
