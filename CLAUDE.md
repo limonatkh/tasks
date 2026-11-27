@@ -39,6 +39,17 @@ They hold the decisions, the state, the design tokens and the open questions. Th
   - CI: `.github/workflows/desktop.yml` on Windows: `:shared:test`, `:desktop:shots`, `:desktop:packageMsi`; on `main` it publishes a pre-release `desktop-N` with the MSI.
 - Any change to an entity changes the database: CI compares Room's schema hash with `main` and fails if it changed without a migration.
 
-## Next work (see HANDOFF §7)
+## Sync (0.37 / computer 1.1.0)
 
-The laptop (Windows) version that does everything the phone does and syncs with it. Decided 2026-11-26: a Windows app (user: «أريحلي تطبيق مستقل»), same repo, folders android/ + desktop/ + shared/. Firebase project ID: `time-manager0` (given 2026-11-26). Still open: the Android app's `google-services.json` (keep it out of git; CI writes it from a secret), the desktop Google sign-in client, sync conflict rule, and the desktop design (must be mocked up and approved before any code).
+- Firebase project `time-manager0`: Google sign-in (phone), Anonymous sign-in (computer as a device), Firestore `me-west1`, rules in `firestore.rules` (published by the user 2026-11-27).
+- Cloud data: `users/<owner uid>/rows/<urlencoded "table|id">` = {table, id, data (row JSON or null = deleted), at, device}; `users/<owner>.devices` = paired computers; `pair/<code>` = pairing notes.
+- Shared: `Rows.kt` (every field of every table), `Sync.kt` (`TrackingStore`, `Pending`, `SyncEngine`, last change wins, device-only settings in `Rows.localMeta`). Tests: `SyncTest`.
+- Phone: `PhoneSync.kt` (Credential Manager + Firebase Auth, `FirestoreCloud`, loop every 30 s while visible), Settings → التزامن مع الكمبيوتر. Prefs file `sync` (not in backup).
+- Computer: `DesktopSync.kt` (REST: anonymous sign-up, Firestore commit/runQuery, pairing code), `DesktopSyncUi.kt`, prefs `%APPDATA%\SmartLifePlanner\sync.json`. Pairing replaces the computer's data with the account's.
+- `android/google-services.json` is not in git; CI writes it from the `GOOGLE_SERVICES_JSON` secret (set by the user). The computer gets `firebase.properties` from it at build time.
+- Not tested yet (needs the user's real devices): Google sign-in on the phone, pairing, real round trips. Emulator and CI cannot sign in.
+
+## Next work
+
+- The user tries sign-in and pairing; fix what shows up.
+- Computer: more of the phone's editors (rules/routine, goals, plans), Quran/Instagram stay phone-only.
